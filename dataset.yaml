@@ -1,0 +1,10 @@
+# Dataset configuration
+train: dataset/Training/images
+val: dataset/Validation/images
+test: dataset/Testing/images
+
+# Number of classes
+nc: 1
+
+# Class names
+names: ['Person']
