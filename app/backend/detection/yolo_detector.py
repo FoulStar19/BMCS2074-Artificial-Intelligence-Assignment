@@ -1,177 +1,122 @@
-"""
-YOLO-based vehicle detector
-"""
-
+# backend/detection/yolo_detector.py
 import torch
-import numpy as np
 import cv2
-import os
-import sys
-
-# Add parent directory to path for model imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-
-try:
-    import ultralytics
-    from ultralytics import YOLO
-except ImportError:
-    print("Ultralytics not installed. Using dummy implementation.")
-    ultralytics = None
-
+import numpy as np
+from pathlib import Path
 
 class YOLODetector:
-    """YOLO-based vehicle detector"""
-    
-    def __init__(self, model_path=None, device='cpu', confidence_threshold=0.5):
+    def __init__(self, model_path=None, device='cpu'):
         """
         Initialize YOLO detector
         
         Args:
             model_path: Path to YOLO model weights
             device: 'cpu' or 'cuda'
-            confidence_threshold: Minimum confidence for detections
         """
-        self.device = device if torch.cuda.is_available() else 'cpu'
-        self.confidence_threshold = confidence_threshold
+        self.device = device
+        self.model = None
         
-        # Vehicle classes (COCO dataset)
-        self.vehicle_classes = [
-            'car', 'truck', 'bus', 'motorcycle', 'bicycle',
-            'train', 'boat', 'airplane'
-        ]
+        # If no model path provided, use the default
+        if model_path is None:
+            # Use your specific path
+            model_path = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt"
         
-        # Initialize YOLO model
-        if ultralytics is not None:
+        self.load_model(model_path)
+        
+    def load_model(self, model_path):
+        """Load YOLO model from file"""
+        try:
+            # Try loading with ultralytics YOLO
             try:
-                if model_path and os.path.exists(model_path):
-                    self.model = YOLO(model_path)
-                else:
-                    # Use YOLOv8n pretrained model
-                    self.model = YOLO('yolov8n.pt')
+                from ultralytics import YOLO
+                self.model = YOLO(model_path)
+                print(f"Loaded YOLO model from {model_path}")
+            except ImportError:
+                # Fallback to PyTorch loading
+                self.model = torch.load(model_path, map_location=self.device)
+                self.model.eval()
+                print(f"Loaded PyTorch model from {model_path}")
                 
-                # Move to device
-                self.model.to(self.device)
-                print(f"YOLO model loaded on {self.device}")
-                
-            except Exception as e:
-                print(f"Error loading YOLO model: {e}")
-                self.model = None
-        else:
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            # Create dummy model for demonstration
             self.model = None
-            print("YOLO model not available. Using dummy implementation.")
-    
+            self.is_dummy = True
+            
     def detect(self, frame):
         """
-        Detect vehicles in a frame using YOLO
+        Detect vehicles in frame
         
         Args:
-            frame: Input image (numpy array)
+            frame: numpy array (BGR image)
             
         Returns:
             List of detections with bbox and confidence
         """
         if self.model is None:
             return self._dummy_detection(frame)
-        
-        if frame is None:
-            return []
-        
-        # Run inference
+            
         try:
-            results = self.model(frame, conf=self.confidence_threshold, verbose=False)
-            
-            detections = []
-            
-            if results and len(results) > 0:
-                boxes = results[0].boxes
-                if boxes is not None:
-                    for box in boxes:
-                        # Get class id and confidence
-                        class_id = int(box.cls[0])
-                        confidence = float(box.conf[0])
-                        
-                        # Get class name
-                        class_name = self.model.names[class_id]
-                        
-                        # Filter for vehicle classes
-                        if class_name.lower() in self.vehicle_classes:
-                            # Get bounding box coordinates
+            # Check if using ultralytics YOLO
+            if hasattr(self.model, 'predict'):
+                results = self.model.predict(frame, conf=0.5, device=self.device)
+                
+                detections = []
+                for r in results:
+                    boxes = r.boxes
+                    if boxes is not None:
+                        for box in boxes:
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            conf = box.conf[0].cpu().numpy()
+                            cls = box.cls[0].cpu().numpy()
                             
-                            detections.append({
-                                'bbox': [int(x1), int(y1), int(x2), int(y2)],
-                                'confidence': confidence,
-                                'class': class_name,
-                                'class_id': class_id
-                            })
-            
-            return detections
-            
+                            # Only detect vehicles (car, truck, bus, motorcycle, etc.)
+                            vehicle_classes = [0, 1, 2, 3, 5, 7]  # COCO classes for vehicles
+                            if int(cls) in vehicle_classes:
+                                detections.append({
+                                    'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                                    'confidence': float(conf),
+                                    'class': int(cls)
+                                })
+                return detections
+            else:
+                # PyTorch model loading
+                return self._pytorch_detection(frame)
+                
         except Exception as e:
-            print(f"Error in YOLO detection: {e}")
+            print(f"Error during detection: {e}")
             return self._dummy_detection(frame)
     
-    def _dummy_detection(self, frame):
-        """Dummy detection for testing when YOLO is not available"""
-        h, w = frame.shape[:2]
+    def _pytorch_detection(self, frame):
+        """Detection with PyTorch model"""
+        # Preprocess frame
+        img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_tensor = torch.from_numpy(img).float().permute(2, 0, 1).unsqueeze(0)
+        img_tensor = img_tensor / 255.0
+        img_tensor = img_tensor.to(self.device)
         
-        # Create some random detections for demonstration
-        num_detections = np.random.randint(2, 8)
+        # Run inference
+        with torch.no_grad():
+            outputs = self.model(img_tensor)
+        
+        # Process outputs (simplified - adjust based on your model's output format)
         detections = []
-        
-        for _ in range(num_detections):
-            x = np.random.randint(0, w - 100)
-            y = np.random.randint(0, h - 100)
-            w_box = np.random.randint(80, 200)
-            h_box = np.random.randint(100, 250)
-            
-            # Ensure box stays within frame
-            if x + w_box > w:
-                w_box = w - x
-            if y + h_box > h:
-                h_box = h - y
-            
+        # This is a placeholder - actual processing depends on your model
+        return self._dummy_detection(frame)
+    
+    def _dummy_detection(self, frame):
+        """Fallback: generate dummy detections for testing"""
+        h, w = frame.shape[:2]
+        detections = []
+        # Generate 3-8 random vehicles
+        num_vehicles = np.random.randint(3, 8)
+        for _ in range(num_vehicles):
+            x1 = np.random.randint(50, w-200)
+            y1 = np.random.randint(50, h-200)
+            x2 = x1 + np.random.randint(100, 200)
+            y2 = y1 + np.random.randint(80, 150)
             detections.append({
-                'bbox': [x, y, x + w_box, y + h_box],
-                'confidence': np.random.uniform(0.5, 0.95),
-                'class': np.random.choice(['car', 'truck', 'bus']),
-                'class_id': 0
+                'bbox': [int(x1), int(y1), int(x2), int(y2)],
+                'confidence': np.random.uniform(0.6, 0.98)
             })
-        
         return detections
-    
-    def detect_batch(self, frames):
-        """
-        Detect vehicles in multiple frames
-        
-        Args:
-            frames: List of input images
-            
-        Returns:
-            List of detections for each frame
-        """
-        if self.model is None:
-            return [self._dummy_detection(frame) for frame in frames]
-        
-        detections_list = []
-        for frame in frames:
-            detections_list.append(self.detect(frame))
-        
-        return detections_list
-    
-    def save_model(self, path):
-        """Save model weights"""
-        if self.model is not None:
-            self.model.export(path)
-            print(f"Model saved to {path}")
-        else:
-            print("No model to save")
-    
-    def load_model(self, path):
-        """Load model weights"""
-        if ultralytics is not None and os.path.exists(path):
-            self.model = YOLO(path)
-            self.model.to(self.device)
-            print(f"Model loaded from {path}")
-        else:
-            print(f"Model file not found: {path}")

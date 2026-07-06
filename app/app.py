@@ -79,12 +79,20 @@ with st.sidebar:
         index=2
     )
     
+    video_path = None  # Initialize video_path
+    
     if source_type == "Upload Video":
         uploaded_file = st.file_uploader(
             "Upload a video file",
             type=["mp4", "avi", "mov", "mkv"]
         )
-        video_path = uploaded_file if uploaded_file else None
+        if uploaded_file is not None:
+            # Save uploaded file to temporary file
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            tfile.write(uploaded_file.read())
+            video_path = tfile.name
+        else:
+            video_path = None
     
     elif source_type == "Sample Video":
         # Use a sample video or webcam
@@ -93,12 +101,16 @@ with st.sidebar:
             "Sample Traffic 1": "sample_videos/traffic1.mp4",
             "Sample Traffic 2": "sample_videos/traffic2.mp4"
         }
-        video_path = st.selectbox(
+        selected_video = st.selectbox(
             "Select sample video",
             options=list(sample_videos.keys())
         )
-        if video_path and video_path != "None":
-            video_path = sample_videos[video_path]
+        if selected_video and selected_video != "None":
+            video_path = sample_videos[selected_video]
+            # Check if the file exists
+            if video_path and not os.path.exists(video_path):
+                st.warning(f"Sample video not found at: {video_path}")
+                video_path = None
         else:
             video_path = None
     
@@ -182,11 +194,19 @@ with tab1:
     
     with col2:
         st.subheader("Live Statistics")
-        st.metric("🚗 Vehicles Detected", "0", delta=None)
-        st.metric("📏 Avg Speed", "0 km/h", delta=None)
-        st.metric("📊 Traffic Density", "0%", delta=None)
-        st.metric("📹 Frames Processed", "0", delta=None)
-        st.metric("⏱️ Processing Time", "0s", delta=None)
+        # Create placeholders for metrics
+        vehicles_metric = st.empty()
+        speed_metric = st.empty()
+        density_metric = st.empty()
+        frames_metric = st.empty()
+        time_metric = st.empty()
+        
+        # Initialize with zeros
+        vehicles_metric.metric("🚗 Vehicles Detected", "0")
+        speed_metric.metric("📏 Avg Speed", "0 km/h")
+        density_metric.metric("📊 Traffic Density", "0%")
+        frames_metric.metric("📹 Frames Processed", "0")
+        time_metric.metric("⏱️ Processing Time", "0s")
 
 # ==========================
 # TAB 2: Analytics
@@ -198,31 +218,24 @@ with tab2:
     # Create metrics in a grid
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Total Vehicles", "0", delta=None)
+        total_vehicles_metric = st.empty()
+        total_vehicles_metric.metric("Total Vehicles", "0")
     with col2:
-        st.metric("Average Speed", "0 km/h", delta=None)
+        avg_speed_metric = st.empty()
+        avg_speed_metric.metric("Average Speed", "0 km/h")
     with col3:
-        st.metric("Max Speed", "0 km/h", delta=None)
+        max_speed_metric = st.empty()
+        max_speed_metric.metric("Max Speed", "0 km/h")
     with col4:
-        st.metric("Min Speed", "0 km/h", delta=None)
+        min_speed_metric = st.empty()
+        min_speed_metric.metric("Min Speed", "0 km/h")
     
     st.divider()
     
     # Detection History
     st.subheader("Detection History")
-    
-    # Sample data structure
-    history_data = pd.DataFrame({
-        "Frame": [],
-        "Vehicles": [],
-        "Avg Speed": [],
-        "Density": []
-    })
-    
-    if history_data.empty:
-        st.info("📊 No data available yet. Start processing to see analytics.")
-    else:
-        st.dataframe(history_data, use_container_width=True)
+    history_container = st.empty()
+    history_container.info("📊 No data available yet. Start processing to see analytics.")
     
     st.divider()
     
@@ -232,7 +245,6 @@ with tab2:
     with col1:
         if st.button("Download CSV Report", use_container_width=True):
             st.success("Report downloaded successfully!")
-            # In real implementation, generate and download CSV
     with col2:
         if st.button("Download Summary Report", use_container_width=True):
             st.success("Summary report downloaded successfully!")
@@ -249,6 +261,7 @@ with tab3:
     
     with col1:
         st.subheader("Speed Distribution")
+        speed_dist_container = st.empty()
         # Sample graph
         fig1 = go.Figure()
         fig1.add_trace(go.Histogram(
@@ -262,10 +275,11 @@ with tab3:
             yaxis_title="Frequency",
             height=400
         )
-        st.plotly_chart(fig1, use_container_width=True)
+        speed_dist_container.plotly_chart(fig1, use_container_width=True)
     
     with col2:
         st.subheader("Traffic Over Time")
+        traffic_over_time_container = st.empty()
         # Sample graph
         fig2 = go.Figure()
         frames = list(range(100))
@@ -289,13 +303,14 @@ with tab3:
             yaxis_title="Count / Speed",
             height=400
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        traffic_over_time_container.plotly_chart(fig2, use_container_width=True)
     
     # Second row of graphs
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("Traffic Density Heatmap")
+        density_heatmap_container = st.empty()
         # Sample heatmap
         fig3 = go.Figure()
         fig3.add_trace(go.Scatter(
@@ -312,10 +327,11 @@ with tab3:
             name="Density"
         ))
         fig3.update_layout(height=400)
-        st.plotly_chart(fig3, use_container_width=True)
+        density_heatmap_container.plotly_chart(fig3, use_container_width=True)
     
     with col2:
         st.subheader("Speed vs Density Correlation")
+        speed_density_container = st.empty()
         # Sample correlation
         speeds = np.random.normal(55, 15, 100)
         densities = 100 - speeds * 0.5 + np.random.normal(0, 10, 100)
@@ -337,20 +353,35 @@ with tab3:
             yaxis_title="Density (%)",
             height=400
         )
-        st.plotly_chart(fig4, use_container_width=True)
+        speed_density_container.plotly_chart(fig4, use_container_width=True)
 
 # ==========================
 # Video Processing Functions
 # ==========================
 
-def process_video(video_path, model_type, confidence_threshold, fps, frame_skip):
+def process_video(video_path, model_type, confidence_threshold, fps, frame_skip, 
+                  video_container, status_text, vehicles_metric, speed_metric, 
+                  density_metric, frames_metric, time_metric,
+                  total_vehicles_metric, avg_speed_metric, max_speed_metric, min_speed_metric,
+                  history_container, speed_dist_container, traffic_over_time_container,
+                  density_heatmap_container, speed_density_container):
     """Process video with the selected model"""
     status_text.text("🚀 Initializing model...")
     
-    # Initialize detector
+    # Validate video path
+    if video_path is None:
+        st.error("⚠️ No video source selected")
+        return
+    
+    # Initialize detector with your model path
     try:
         if model_type == "YOLO":
-            detector = YOLODetector(device='cuda' if torch.cuda.is_available() else 'cpu')
+            # Specify your YOLO model path
+            model_path = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt"
+            detector = YOLODetector(
+                model_path=model_path,
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
         else:
             detector = CNNDetector(device='cuda' if torch.cuda.is_available() else 'cpu')
     except Exception as e:
@@ -358,12 +389,30 @@ def process_video(video_path, model_type, confidence_threshold, fps, frame_skip)
         return
     
     # Initialize video capture
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        st.error("Could not open video source")
+    try:
+        # Handle different types of video_path
+        if isinstance(video_path, int):
+            # Webcam
+            cap = cv2.VideoCapture(video_path)
+        elif isinstance(video_path, str):
+            # File path - check if it exists
+            if not os.path.exists(video_path):
+                st.error(f"Video file not found: {video_path}")
+                return
+            cap = cv2.VideoCapture(video_path)
+        else:
+            st.error(f"Invalid video source type: {type(video_path)}")
+            return
+            
+        if not cap.isOpened():
+            st.error("Could not open video source")
+            return
+            
+    except Exception as e:
+        st.error(f"Error opening video: {e}")
         return
     
-    # Get total frames
+    # Get total frames (if file)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_count = 0
     processed_count = 0
@@ -375,6 +424,9 @@ def process_video(video_path, model_type, confidence_threshold, fps, frame_skip)
     
     # Process video
     start_time = time.time()
+    
+    # Create placeholder for status
+    progress_bar = st.progress(0)
     
     while True:
         ret, frame = cap.read()
@@ -418,18 +470,22 @@ def process_video(video_path, model_type, confidence_threshold, fps, frame_skip)
             video_container.image(frame_rgb, channels="RGB", use_container_width=True)
             
             # Update statistics
-            with col2:
-                st.metric("🚗 Vehicles Detected", len(detections))
-                st.metric("📏 Avg Speed", f"{avg_speed:.1f} km/h")
-                st.metric("📊 Traffic Density", f"{density:.1f}%")
-                st.metric("📹 Frames Processed", processed_count + 1)
-                elapsed = time.time() - start_time
-                st.metric("⏱️ Processing Time", f"{elapsed:.1f}s")
+            elapsed = time.time() - start_time
+            vehicles_metric.metric("🚗 Vehicles Detected", len(detections))
+            speed_metric.metric("📏 Avg Speed", f"{avg_speed:.1f} km/h")
+            density_metric.metric("📊 Traffic Density", f"{density:.1f}%")
+            frames_metric.metric("📹 Frames Processed", processed_count + 1)
+            time_metric.metric("⏱️ Processing Time", f"{elapsed:.1f}s")
             
             processed_count += 1
             
+            # Update progress
+            if total_frames > 0:
+                progress_bar.progress(frame_count / total_frames)
+            
         except Exception as e:
             st.error(f"Error processing frame: {e}")
+            continue
         
         frame_count += 1
         
@@ -438,87 +494,134 @@ def process_video(video_path, model_type, confidence_threshold, fps, frame_skip)
             break
     
     cap.release()
+    progress_bar.empty()
     status_text.text("✅ Processing completed!")
     
     # Update analytics tab with real data
     if detections_data:
-        with tab2:
-            st.subheader("📊 Detection Results")
-            
-            # Create DataFrame
-            results_df = pd.DataFrame({
-                "Frame": list(range(1, len(detections_data) + 1)),
-                "Vehicles": detections_data,
-                "Avg Speed": speed_data,
-                "Density": density_data
-            })
-            
-            st.dataframe(results_df, use_container_width=True)
-            
-            # Update metrics
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Total Vehicles", sum(detections_data))
-            with col2:
-                st.metric("Average Speed", f"{np.mean(speed_data):.1f} km/h")
-            with col3:
-                st.metric("Max Speed", f"{np.max(speed_data):.1f} km/h")
-            with col4:
-                st.metric("Min Speed", f"{np.min(speed_data):.1f} km/h")
-            
-            # Update graphs with real data
-            with tab3:
-                # Speed Distribution
-                fig1 = go.Figure()
-                fig1.add_trace(go.Histogram(
-                    x=speed_data,
-                    nbinsx=20,
-                    marker_color='blue',
-                    opacity=0.7
-                ))
-                fig1.update_layout(
-                    xaxis_title="Speed (km/h)",
-                    yaxis_title="Frequency",
-                    height=400
-                )
-                st.plotly_chart(fig1, use_container_width=True)
-                
-                # Traffic Over Time
-                fig2 = go.Figure()
-                fig2.add_trace(go.Scatter(
-                    x=list(range(1, len(detections_data) + 1)),
-                    y=detections_data,
-                    name="Vehicles",
-                    line=dict(color='green', width=2)
-                ))
-                fig2.add_trace(go.Scatter(
-                    x=list(range(1, len(speed_data) + 1)),
-                    y=speed_data,
-                    name="Avg Speed",
-                    line=dict(color='red', width=2)
-                ))
-                fig2.update_layout(
-                    xaxis_title="Frame",
-                    yaxis_title="Count / Speed",
-                    height=400
-                )
-                st.plotly_chart(fig2, use_container_width=True)
+        # Create DataFrame
+        results_df = pd.DataFrame({
+            "Frame": list(range(1, len(detections_data) + 1)),
+            "Vehicles": detections_data,
+            "Avg Speed": speed_data,
+            "Density": density_data
+        })
+        
+        # Update history
+        history_container.dataframe(results_df, use_container_width=True)
+        
+        # Update metrics
+        total_vehicles_metric.metric("Total Vehicles", sum(detections_data))
+        avg_speed_metric.metric("Average Speed", f"{np.mean(speed_data):.1f} km/h")
+        max_speed_metric.metric("Max Speed", f"{np.max(speed_data):.1f} km/h")
+        min_speed_metric.metric("Min Speed", f"{np.min(speed_data):.1f} km/h")
+        
+        # Update graphs with real data
+        # Speed Distribution
+        fig1 = go.Figure()
+        fig1.add_trace(go.Histogram(
+            x=speed_data,
+            nbinsx=20,
+            marker_color='blue',
+            opacity=0.7
+        ))
+        fig1.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Frequency",
+            height=400
+        )
+        speed_dist_container.plotly_chart(fig1, use_container_width=True)
+        
+        # Traffic Over Time
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=list(range(1, len(detections_data) + 1)),
+            y=detections_data,
+            name="Vehicles",
+            line=dict(color='green', width=2)
+        ))
+        fig2.add_trace(go.Scatter(
+            x=list(range(1, len(speed_data) + 1)),
+            y=speed_data,
+            name="Avg Speed",
+            line=dict(color='red', width=2)
+        ))
+        fig2.update_layout(
+            xaxis_title="Frame",
+            yaxis_title="Count / Speed",
+            height=400
+        )
+        traffic_over_time_container.plotly_chart(fig2, use_container_width=True)
+        
+        # Density Heatmap
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(
+            x=list(range(1, len(detections_data) + 1)),
+            y=density_data,
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=density_data,
+                colorscale='Hot',
+                showscale=True,
+                colorbar=dict(title="Density")
+            ),
+            name="Density"
+        ))
+        fig3.update_layout(height=400)
+        density_heatmap_container.plotly_chart(fig3, use_container_width=True)
+        
+        # Speed vs Density Correlation
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(
+            x=speed_data,
+            y=density_data,
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='purple',
+                opacity=0.6
+            ),
+            name="Data Points"
+        ))
+        fig4.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Density (%)",
+            height=400
+        )
+        speed_density_container.plotly_chart(fig4, use_container_width=True)
 
 # ==========================
 # Main Processing Logic
 # ==========================
 
 if start_button:
-    if not video_path:
+    if video_path is None:
         st.error("⚠️ Please select a video source first")
     else:
-        # Start processing
+        # Start processing with all necessary containers
         process_video(
-            video_path,
-            model_type,
-            confidence_threshold,
-            fps,
-            frame_skip
+            video_path=video_path,
+            model_type=model_type,
+            confidence_threshold=confidence_threshold,
+            fps=fps,
+            frame_skip=frame_skip,
+            video_container=video_container,
+            status_text=status_text,
+            vehicles_metric=vehicles_metric,
+            speed_metric=speed_metric,
+            density_metric=density_metric,
+            frames_metric=frames_metric,
+            time_metric=time_metric,
+            total_vehicles_metric=total_vehicles_metric,
+            avg_speed_metric=avg_speed_metric,
+            max_speed_metric=max_speed_metric,
+            min_speed_metric=min_speed_metric,
+            history_container=history_container,
+            speed_dist_container=speed_dist_container,
+            traffic_over_time_container=traffic_over_time_container,
+            density_heatmap_container=density_heatmap_container,
+            speed_density_container=speed_density_container
         )
 
 # ==========================
@@ -535,8 +638,6 @@ st.caption(f"Model: {model_type} | Device: {device} | FPS: {fps} | Frame Skip: {
 
 def cleanup():
     """Cleanup resources when app closes"""
-    if 'cap' in locals():
-        cap.release()
     cv2.destroyAllWindows()
 
 # Register cleanup
