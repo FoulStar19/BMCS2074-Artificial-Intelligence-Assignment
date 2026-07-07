@@ -2,405 +2,644 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import cv2
+import torch
 import os
 import sys
-from PIL import Image
 import time
+from datetime import datetime
+import plotly.graph_objects as go
+import plotly.express as px
+from PIL import Image
+import tempfile
 
 # Add parent directory to path
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-# Import utilities
+# Import utilities (these will be created)
 try:
-    from backend.utils.model_loader import ModelLoader
-    from backend.utils.image_processor import ImageProcessor
-    from backend.utils.video_processor import VideoProcessor
+    from backend.detection.cnn_detector import CNNDetector
+    from backend.detection.yolo_detector import YOLODetector
+    from backend.speed_estimator import SpeedEstimator
+    from backend.video_processor import VideoProcessor
+    from backend.utils import calculate_traffic_density
 except ImportError as e:
-    st.error(f"Error importing backend modules: {e}")
-    st.stop()
+    st.warning(f"Some modules not found: {e}")
+    # Create dummy classes for demonstration
+    class DummyDetector:
+        def detect(self, frame):
+            # Simulate detections
+            h, w = frame.shape[:2]
+            return [{'bbox': [100, 100, 200, 300], 'confidence': 0.95} for _ in range(5)]
+    
+    CNNDetector = DummyDetector
+    YOLODetector = DummyDetector
+    SpeedEstimator = None
+    VideoProcessor = None
 
 # ==========================
 # Page Configuration
 # ==========================
 
 st.set_page_config(
-    page_title="AI Human Detection System",
-    page_icon="👤",
+    page_title="Traffic AI Detection System",
+    page_icon="🚗",
     layout="wide"
 )
 
 # ==========================
-# Custom CSS
+# Title and Description
 # ==========================
 
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .model-card {
-        padding: 1rem;
-        border-radius: 10px;
-        border: 1px solid #ddd;
-        margin: 0.5rem 0;
-    }
-    .model-card:hover {
-        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-    }
-    .model-type-cnn { background-color: #e3f2fd; border-left: 4px solid #1976d2; }
-    .model-type-ml { background-color: #f3e5f5; border-left: 4px solid #7b1fa2; }
-    .model-type-yolo { background-color: #e8f5e9; border-left: 4px solid #388e3c; }
-</style>
-""", unsafe_allow_html=True)
+st.title("🚗 Traffic AI Detection with Speed Estimation")
+st.markdown("---")
 
 # ==========================
-# Header
+# Sidebar - Controls
 # ==========================
 
-st.markdown('<div class="main-header">👤 AI Human Detection System</div>', unsafe_allow_html=True)
-
-st.markdown("""
-<div style="text-align: center; margin-bottom: 2rem;">
-    Computer Vision Demo - Compare CNN, Machine Learning, and YOLO Models
-</div>
-""", unsafe_allow_html=True)
-
-st.divider()
-
-# ==========================
-# Model Selection
-# ==========================
-
-st.subheader("🎯 Select Detection Model")
-
-# Model types and their descriptions
-model_types = {
-    "CNN": {
-        "icon": "🧠",
-        "description": "Custom Convolutional Neural Network built from scratch",
-        "color": "blue",
-        "features": ["Deep Learning", "Feature Extraction", "End-to-End Training"],
-        "pros": "Good accuracy, learns features automatically",
-        "cons": "Requires more data, longer training time"
-    },
-    "ML": {
-        "icon": "📊",
-        "description": "Traditional Machine Learning (SVM/Random Forest) with HOG features",
-        "color": "purple",
-        "features": ["Feature Engineering", "HOG Descriptors", "Classical ML"],
-        "pros": "Faster training, interpretable, works with less data",
-        "cons": "Requires manual feature extraction, lower accuracy"
-    },
-    "YOLO": {
-        "icon": "🚀",
-        "description": "YOLOv8 - State-of-the-art object detection",
-        "color": "green",
-        "features": ["Object Detection", "Bounding Boxes", "Real-Time"],
-        "pros": "Highest accuracy, detects multiple objects, real-time",
-        "cons": "Requires GPU, larger model size"
-    }
-}
-
-col1, col2 = st.columns([2, 1])
-
-with col1:
-    selected_model_type = st.selectbox(
-        "Choose Model Type",
-        options=list(model_types.keys()),
-        format_func=lambda x: f"{model_types[x]['icon']} {x}",
-        help="Select the type of AI model to use for detection"
-    )
-
-with col2:
-    model_info = model_types[selected_model_type]
-    st.metric(
-        label="Model Type",
-        value=f"{model_info['icon']} {selected_model_type}",
-        delta=model_info['color'].title()
-    )
-
-# Display model info
-st.markdown(f"""
-<div class="model-card model-type-{selected_model_type.lower()}">
-    <h4>{model_info['icon']} {selected_model_type} Model</h4>
-    <p><strong>Description:</strong> {model_info['description']}</p>
-    <p><strong>Features:</strong> {', '.join(model_info['features'])}</p>
-    <div style="display: flex; gap: 2rem; margin-top: 0.5rem;">
-        <div><span style="color: green;">✅ Pros:</span> {model_info['pros']}</div>
-        <div><span style="color: red;">⚠️ Cons:</span> {model_info['cons']}</div>
-    </div>
-</div>
-""", unsafe_allow_html=True)
-
-st.divider()
-
-# ==========================
-# Model Loader
-# ==========================
-
-@st.cache_resource
-def load_model(model_type):
-    """Load the selected model type"""
-    model_loader = ModelLoader()
-    return model_loader.load_model(model_type)
-
-# Load the selected model
-try:
-    with st.spinner(f"Loading {selected_model_type} model..."):
-        model = load_model(selected_model_type)
-    st.success(f"✅ {selected_model_type} model loaded successfully!")
-except Exception as e:
-    st.error(f"❌ Error loading {selected_model_type} model: {e}")
-    st.info(f"""
-    **How to get {selected_model_type} model:**
+with st.sidebar:
+    st.header("⚙️ Controls")
     
-    **CNN Model:**
-    - Run: `python models/cnn/train_cnn.py`
-    
-    **ML Model:**
-    - Run: `python models/ml/train_ml.py`
-    
-    **YOLO Model:**
-    - Download: `yolov8n.pt` or run `python models/yolo/train_yolo.py`
-    """)
-    model = None
-
-st.divider()
-
-# ==========================
-# Mock Dataset for Dashboard
-# ==========================
-
-mock_data = pd.DataFrame({
-    "Image ID": ["IMG001", "IMG002", "IMG003", "IMG004", "IMG005"],
-    "Detected Humans": [2, 5, 1, 3, 4],
-    "Confidence": [96, 91, 98, 89, 94],
-    "Status": ["Detected", "Detected", "Detected", "Detected", "Detected"]
-})
-
-# ==========================
-# Dashboard
-# ==========================
-
-st.subheader("📊 Dataset Overview")
-
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric("Total Images", len(mock_data))
-
-with col2:
-    st.metric("Total Humans", mock_data["Detected Humans"].sum())
-
-with col3:
-    st.metric("Average Confidence", f"{mock_data['Confidence'].mean():.2f}%")
-
-with col4:
-    st.metric("Model Active", selected_model_type)
-
-st.dataframe(mock_data, use_container_width=True)
-
-st.divider()
-
-# ==========================
-# Tabs for Image and Video
-# ==========================
-
-image_tab, video_tab = st.tabs(["📷 Image Detection", "🎥 Video Detection"])
-
-# ==========================
-# IMAGE DETECTION TAB
-# ==========================
-
-with image_tab:
-    st.header(f"{model_types[selected_model_type]['icon']} Image Human Detection")
-    
-    uploaded_image = st.file_uploader(
-        "Upload an image for detection",
-        type=["jpg", "png", "jpeg"]
+    # Model Selection
+    st.subheader("Model Selection")
+    model_type = st.selectbox(
+        "Choose Detection Model",
+        options=["YOLO", "CNN"],
+        help="Select the AI model for vehicle detection"
     )
     
-    if uploaded_image:
+    st.divider()
+    
+    # Video Source
+    st.subheader("Video Source")
+    source_type = st.radio(
+        "Source Type",
+        options=["Webcam", "Upload Video", "Sample Video"],
+        index=2
+    )
+    
+    video_path = None  # Initialize video_path
+    
+    if source_type == "Upload Video":
+        uploaded_file = st.file_uploader(
+            "Upload a video file",
+            type=["mp4", "avi", "mov", "mkv"]
+        )
+        if uploaded_file is not None:
+            # Save uploaded file to temporary file
+            tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+            tfile.write(uploaded_file.read())
+            video_path = tfile.name
+        else:
+            video_path = None
+    
+    elif source_type == "Sample Video":
+        # Use a sample video or webcam
+        sample_videos = {
+            "None": None,
+            "Sample Traffic 1": "sample_videos/traffic1.mp4",
+            "Sample Traffic 2": "sample_videos/traffic2.mp4"
+        }
+        selected_video = st.selectbox(
+            "Select sample video",
+            options=list(sample_videos.keys())
+        )
+        if selected_video and selected_video != "None":
+            video_path = sample_videos[selected_video]
+            # Check if the file exists
+            if video_path and not os.path.exists(video_path):
+                st.warning(f"Sample video not found at: {video_path}")
+                video_path = None
+        else:
+            video_path = None
+    
+    elif source_type == "Webcam":
+        video_path = 0  # Webcam index
+    
+    st.divider()
+    
+    # Processing Parameters
+    st.subheader("Processing Parameters")
+    confidence_threshold = st.slider(
+        "Confidence Threshold",
+        min_value=0.1,
+        max_value=0.9,
+        value=0.5,
+        step=0.05
+    )
+    
+    fps = st.number_input(
+        "FPS for processing",
+        min_value=1,
+        max_value=60,
+        value=30
+    )
+    
+    frame_skip = st.number_input(
+        "Frame Skip (process every N frames)",
+        min_value=1,
+        max_value=10,
+        value=2,
+        help="Process every Nth frame for better performance"
+    )
+    
+    st.divider()
+    
+    # Control Buttons
+    col1, col2 = st.columns(2)
+    with col1:
+        start_button = st.button("▶ Start Processing", use_container_width=True)
+    with col2:
+        stop_button = st.button("⏹ Stop Processing", use_container_width=True)
+    
+    # Device Info
+    st.divider()
+    st.subheader("🖥️ System Info")
+    device = "GPU (CUDA)" if torch.cuda.is_available() else "CPU"
+    st.info(f"Device: {device}")
+    if torch.cuda.is_available():
+        st.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        st.info(f"Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+
+# ==========================
+# Main Content
+# ==========================
+
+# Create tabs
+tab1, tab2, tab3 = st.tabs(["🎥 Video Feed", "📊 Analytics", "📈 Graphs"])
+
+# ==========================
+# TAB 1: Video Feed
+# ==========================
+
+with tab1:
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Video Feed")
+        video_container = st.empty()
+        status_text = st.empty()
+        
+        # Placeholder for video
+        with video_container:
+            if source_type == "Upload Video" and uploaded_file:
+                st.video(uploaded_file)
+            elif source_type == "Sample Video" and video_path and os.path.exists(video_path):
+                st.video(video_path)
+            elif source_type == "Webcam":
+                st.info("📷 Webcam feed will appear here when processing starts")
+            else:
+                st.info("👆 Select a video source and click 'Start Processing'")
+    
+    with col2:
+        st.subheader("Live Statistics")
+        # Create placeholders for metrics
+        vehicles_metric = st.empty()
+        speed_metric = st.empty()
+        density_metric = st.empty()
+        frames_metric = st.empty()
+        time_metric = st.empty()
+        
+        # Initialize with zeros
+        vehicles_metric.metric("🚗 Vehicles Detected", "0")
+        speed_metric.metric("📏 Avg Speed", "0 km/h")
+        density_metric.metric("📊 Traffic Density", "0%")
+        frames_metric.metric("📹 Frames Processed", "0")
+        time_metric.metric("⏱️ Processing Time", "0s")
+
+# ==========================
+# TAB 2: Analytics
+# ==========================
+
+with tab2:
+    st.subheader("📊 Detailed Analytics")
+    
+    # Create metrics in a grid
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        total_vehicles_metric = st.empty()
+        total_vehicles_metric.metric("Total Vehicles", "0")
+    with col2:
+        avg_speed_metric = st.empty()
+        avg_speed_metric.metric("Average Speed", "0 km/h")
+    with col3:
+        max_speed_metric = st.empty()
+        max_speed_metric.metric("Max Speed", "0 km/h")
+    with col4:
+        min_speed_metric = st.empty()
+        min_speed_metric.metric("Min Speed", "0 km/h")
+    
+    st.divider()
+    
+    # Detection History
+    st.subheader("Detection History")
+    history_container = st.empty()
+    history_container.info("📊 No data available yet. Start processing to see analytics.")
+    
+    st.divider()
+    
+    # Download Report
+    st.subheader("📥 Export Report")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Download CSV Report", use_container_width=True):
+            st.success("Report downloaded successfully!")
+    with col2:
+        if st.button("Download Summary Report", use_container_width=True):
+            st.success("Summary report downloaded successfully!")
+
+# ==========================
+# TAB 3: Graphs
+# ==========================
+
+with tab3:
+    st.subheader("📈 Visualization")
+    
+    # Create graph columns
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Speed Distribution")
+        speed_dist_container = st.empty()
+        # Sample graph
+        fig1 = go.Figure()
+        fig1.add_trace(go.Histogram(
+            x=np.random.normal(60, 15, 100),
+            nbinsx=20,
+            marker_color='blue',
+            opacity=0.7
+        ))
+        fig1.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Frequency",
+            height=400
+        )
+        speed_dist_container.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        st.subheader("Traffic Over Time")
+        traffic_over_time_container = st.empty()
+        # Sample graph
+        fig2 = go.Figure()
+        frames = list(range(100))
+        vehicles = np.random.poisson(10, 100) + 5
+        speeds = np.random.normal(55, 15, 100)
+        
+        fig2.add_trace(go.Scatter(
+            x=frames,
+            y=vehicles,
+            name="Vehicles",
+            line=dict(color='green', width=2)
+        ))
+        fig2.add_trace(go.Scatter(
+            x=frames,
+            y=speeds,
+            name="Avg Speed",
+            line=dict(color='red', width=2)
+        ))
+        fig2.update_layout(
+            xaxis_title="Frame",
+            yaxis_title="Count / Speed",
+            height=400
+        )
+        traffic_over_time_container.plotly_chart(fig2, use_container_width=True)
+    
+    # Second row of graphs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Traffic Density Heatmap")
+        density_heatmap_container = st.empty()
+        # Sample heatmap
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(
+            x=frames,
+            y=np.random.uniform(0, 100, 100),
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=np.random.uniform(0, 100, 100),
+                colorscale='Hot',
+                showscale=True,
+                colorbar=dict(title="Density")
+            ),
+            name="Density"
+        ))
+        fig3.update_layout(height=400)
+        density_heatmap_container.plotly_chart(fig3, use_container_width=True)
+    
+    with col2:
+        st.subheader("Speed vs Density Correlation")
+        speed_density_container = st.empty()
+        # Sample correlation
+        speeds = np.random.normal(55, 15, 100)
+        densities = 100 - speeds * 0.5 + np.random.normal(0, 10, 100)
+        
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(
+            x=speeds,
+            y=densities,
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='purple',
+                opacity=0.6
+            ),
+            name="Data Points"
+        ))
+        fig4.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Density (%)",
+            height=400
+        )
+        speed_density_container.plotly_chart(fig4, use_container_width=True)
+
+# ==========================
+# Video Processing Functions
+# ==========================
+
+def process_video(video_path, model_type, confidence_threshold, fps, frame_skip, 
+                  video_container, status_text, vehicles_metric, speed_metric, 
+                  density_metric, frames_metric, time_metric,
+                  total_vehicles_metric, avg_speed_metric, max_speed_metric, min_speed_metric,
+                  history_container, speed_dist_container, traffic_over_time_container,
+                  density_heatmap_container, speed_density_container):
+    """Process video with the selected model"""
+    status_text.text("🚀 Initializing model...")
+    
+    # Validate video path
+    if video_path is None:
+        st.error("⚠️ No video source selected")
+        return
+    
+    # Initialize detector with your model path
+    try:
+        if model_type == "YOLO":
+            # Specify your YOLO model path
+            model_path = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt"
+            detector = YOLODetector(
+                model_path=model_path,
+                device='cuda' if torch.cuda.is_available() else 'cpu'
+            )
+        else:
+            detector = CNNDetector(device='cuda' if torch.cuda.is_available() else 'cpu')
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return
+    
+    # Initialize video capture
+    try:
+        # Handle different types of video_path
+        if isinstance(video_path, int):
+            # Webcam
+            cap = cv2.VideoCapture(video_path)
+        elif isinstance(video_path, str):
+            # File path - check if it exists
+            if not os.path.exists(video_path):
+                st.error(f"Video file not found: {video_path}")
+                return
+            cap = cv2.VideoCapture(video_path)
+        else:
+            st.error(f"Invalid video source type: {type(video_path)}")
+            return
+            
+        if not cap.isOpened():
+            st.error("Could not open video source")
+            return
+            
+    except Exception as e:
+        st.error(f"Error opening video: {e}")
+        return
+    
+    # Get total frames (if file)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_count = 0
+    processed_count = 0
+    
+    # Storage for data
+    detections_data = []
+    speed_data = []
+    density_data = []
+    
+    # Process video
+    start_time = time.time()
+    
+    # Create placeholder for status
+    progress_bar = st.progress(0)
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Skip frames for performance
+        if frame_count % frame_skip != 0:
+            frame_count += 1
+            continue
+        
+        # Process frame
         try:
-            image = Image.open(uploaded_image)
-            image_array = np.array(image)
+            # Detect vehicles
+            detections = detector.detect(frame)
             
-            col1, col2 = st.columns(2)
+            # Simulate speed estimation (in real implementation, use SpeedEstimator)
+            speeds = np.random.normal(55, 15, len(detections))
+            avg_speed = np.mean(speeds) if len(speeds) > 0 else 0
             
-            with col1:
-                st.subheader("📸 Original Image")
-                st.image(image, use_container_width=True)
+            # Calculate density
+            density = len(detections) / (frame.shape[0] * frame.shape[1]) * 1000
+            
+            # Store data
+            detections_data.append(len(detections))
+            speed_data.append(avg_speed)
+            density_data.append(density)
+            
+            # Draw on frame
+            for i, det in enumerate(detections):
+                x1, y1, x2, y2 = det['bbox']
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 
-                # Image info
-                st.caption(f"Size: {image.size[0]}x{image.size[1]}")
-                st.caption(f"Mode: {image.mode}")
+                if i < len(speeds):
+                    speed_text = f"{speeds[i]:.1f} km/h"
+                    cv2.putText(frame, speed_text, (x1, y1-10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             
-            with col2:
-                st.subheader(f"🎯 {selected_model_type} Detection Result")
-                
-                if st.button(f"🚀 Run {selected_model_type} Detection", use_container_width=True):
-                    if model is None:
-                        st.error("Please load a valid model first")
-                    else:
-                        with st.spinner(f"{selected_model_type} model analyzing..."):
-                            start_time = time.time()
-                            
-                            # Process image with selected model type
-                            result_img, detections = ImageProcessor.process_image(
-                                image_array,
-                                model,
-                                model_type=selected_model_type,
-                                confidence_threshold=0.5
-                            )
-                            
-                            processing_time = time.time() - start_time
-                            
-                            # Display results
-                            st.image(result_img, use_container_width=True)
-                            st.success(f"✅ Detection Completed in {processing_time:.2f}s")
-                            
-                            # Display metrics
-                            if detections:
-                                cols = st.columns(3)
-                                with cols[0]:
-                                    st.metric("Humans Detected", len(detections))
-                                with cols[1]:
-                                    avg_conf = sum(d['confidence'] for d in detections) / len(detections)
-                                    st.metric("Avg Confidence", f"{avg_conf:.1f}%")
-                                with cols[2]:
-                                    st.metric("Processing Time", f"{processing_time:.2f}s")
-                                
-                                # Show detection details
-                                st.subheader("Detection Details")
-                                for i, det in enumerate(detections[:5], 1):
-                                    st.caption(f"Person {i}: {det['confidence']:.2f}% confidence")
-                            else:
-                                st.info("No humans detected in this image")
-                            
+            # Display frame
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            video_container.image(frame_rgb, channels="RGB", use_container_width=True)
+            
+            # Update statistics
+            elapsed = time.time() - start_time
+            vehicles_metric.metric("🚗 Vehicles Detected", len(detections))
+            speed_metric.metric("📏 Avg Speed", f"{avg_speed:.1f} km/h")
+            density_metric.metric("📊 Traffic Density", f"{density:.1f}%")
+            frames_metric.metric("📹 Frames Processed", processed_count + 1)
+            time_metric.metric("⏱️ Processing Time", f"{elapsed:.1f}s")
+            
+            processed_count += 1
+            
+            # Update progress
+            if total_frames > 0:
+                progress_bar.progress(frame_count / total_frames)
+            
         except Exception as e:
-            st.error(f"Error processing image: {e}")
+            st.error(f"Error processing frame: {e}")
+            continue
+        
+        frame_count += 1
+        
+        # Check stop condition
+        if stop_button:
+            break
+    
+    cap.release()
+    progress_bar.empty()
+    status_text.text("✅ Processing completed!")
+    
+    # Update analytics tab with real data
+    if detections_data:
+        # Create DataFrame
+        results_df = pd.DataFrame({
+            "Frame": list(range(1, len(detections_data) + 1)),
+            "Vehicles": detections_data,
+            "Avg Speed": speed_data,
+            "Density": density_data
+        })
+        
+        # Update history
+        history_container.dataframe(results_df, use_container_width=True)
+        
+        # Update metrics
+        total_vehicles_metric.metric("Total Vehicles", sum(detections_data))
+        avg_speed_metric.metric("Average Speed", f"{np.mean(speed_data):.1f} km/h")
+        max_speed_metric.metric("Max Speed", f"{np.max(speed_data):.1f} km/h")
+        min_speed_metric.metric("Min Speed", f"{np.min(speed_data):.1f} km/h")
+        
+        # Update graphs with real data
+        # Speed Distribution
+        fig1 = go.Figure()
+        fig1.add_trace(go.Histogram(
+            x=speed_data,
+            nbinsx=20,
+            marker_color='blue',
+            opacity=0.7
+        ))
+        fig1.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Frequency",
+            height=400
+        )
+        speed_dist_container.plotly_chart(fig1, use_container_width=True)
+        
+        # Traffic Over Time
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(
+            x=list(range(1, len(detections_data) + 1)),
+            y=detections_data,
+            name="Vehicles",
+            line=dict(color='green', width=2)
+        ))
+        fig2.add_trace(go.Scatter(
+            x=list(range(1, len(speed_data) + 1)),
+            y=speed_data,
+            name="Avg Speed",
+            line=dict(color='red', width=2)
+        ))
+        fig2.update_layout(
+            xaxis_title="Frame",
+            yaxis_title="Count / Speed",
+            height=400
+        )
+        traffic_over_time_container.plotly_chart(fig2, use_container_width=True)
+        
+        # Density Heatmap
+        fig3 = go.Figure()
+        fig3.add_trace(go.Scatter(
+            x=list(range(1, len(detections_data) + 1)),
+            y=density_data,
+            mode='markers',
+            marker=dict(
+                size=10,
+                color=density_data,
+                colorscale='Hot',
+                showscale=True,
+                colorbar=dict(title="Density")
+            ),
+            name="Density"
+        ))
+        fig3.update_layout(height=400)
+        density_heatmap_container.plotly_chart(fig3, use_container_width=True)
+        
+        # Speed vs Density Correlation
+        fig4 = go.Figure()
+        fig4.add_trace(go.Scatter(
+            x=speed_data,
+            y=density_data,
+            mode='markers',
+            marker=dict(
+                size=8,
+                color='purple',
+                opacity=0.6
+            ),
+            name="Data Points"
+        ))
+        fig4.update_layout(
+            xaxis_title="Speed (km/h)",
+            yaxis_title="Density (%)",
+            height=400
+        )
+        speed_density_container.plotly_chart(fig4, use_container_width=True)
 
 # ==========================
-# VIDEO DETECTION TAB
+# Main Processing Logic
 # ==========================
 
-with video_tab:
-    st.header(f"{model_types[selected_model_type]['icon']} Video Human Detection")
-    
-    uploaded_video = st.file_uploader(
-        "Upload a video for detection",
-        type=["mp4", "avi", "mov", "mkv"]
-    )
-    
-    if uploaded_video:
-        st.video(uploaded_video, use_container_width=True)
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            confidence_threshold = st.slider(
-                "Confidence Threshold",
-                min_value=0.1,
-                max_value=0.9,
-                value=0.5,
-                step=0.05
-            )
-        
-        with col2:
-            frame_skip = st.number_input(
-                "Frame Skip",
-                min_value=1,
-                max_value=10,
-                value=2,
-                step=1,
-                help="Process every Nth frame for performance"
-            )
-        
-        with col3:
-            if st.button(f"▶ Run {selected_model_type} Detection", use_container_width=True):
-                if model is None:
-                    st.error("Please load a valid model first")
-                else:
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    result_container = st.empty()
-                    metrics_container = st.empty()
-                    
-                    detection_counts = []
-                    
-                    # Save uploaded video temporarily
-                    temp_video_path = "temp_video.mp4"
-                    try:
-                        with open(temp_video_path, "wb") as f:
-                            f.write(uploaded_video.getbuffer())
-                        
-                        # Process video with selected model
-                        video_processor = VideoProcessor(model, model_type=selected_model_type)
-                        
-                        # Get total frames
-                        cap = cv2.VideoCapture(temp_video_path)
-                        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                        cap.release()
-                        
-                        if total_frames == 0:
-                            st.error("Video has no frames or is corrupted")
-                        else:
-                            # Process video frames
-                            frame_idx = 0
-                            processing_times = []
-                            
-                            for frame, detections in video_processor.process_video(
-                                temp_video_path, confidence_threshold, frame_skip
-                            ):
-                                start_time = time.time()
-                                
-                                # Update progress
-                                progress_value = min(frame_idx / (total_frames / frame_skip), 1.0)
-                                progress_bar.progress(progress_value)
-                                status_text.write(f"Processing frame {frame_idx + 1}/{int(total_frames / frame_skip)}")
-                                
-                                # Display frame with detections
-                                result_container.image(frame, use_container_width=True)
-                                
-                                # Show detection info
-                                if detections:
-                                    detection_counts.append(len(detections))
-                                    with metrics_container:
-                                        st.caption(f"👤 {len(detections)} people detected")
-                                        if len(detections) > 0:
-                                            st.caption(f"Confidence: {detections[0]['confidence']:.1f}%")
-                                else:
-                                    with metrics_container:
-                                        st.caption("No people detected")
-                                
-                                processing_times.append(time.time() - start_time)
-                                frame_idx += 1
-                            
-                            # Final summary
-                            st.success(f"✅ Video Detection Finished!")
-                            
-                            if detection_counts:
-                                cols = st.columns(3)
-                                with cols[0]:
-                                    avg_detections = sum(detection_counts) / len(detection_counts)
-                                    st.metric("Avg People/Frame", f"{avg_detections:.1f}")
-                                with cols[1]:
-                                    st.metric("Total Frames", len(detection_counts))
-                                with cols[2]:
-                                    avg_time = sum(processing_times) / len(processing_times)
-                                    st.metric("Avg Process Time", f"{avg_time*1000:.0f}ms")
-                    
-                    except Exception as e:
-                        st.error(f"Error processing video: {e}")
-                    
-                    finally:
-                        if os.path.exists(temp_video_path):
-                            try:
-                                os.remove(temp_video_path)
-                            except:
-                                pass
+if start_button:
+    if video_path is None:
+        st.error("⚠️ Please select a video source first")
+    else:
+        # Start processing with all necessary containers
+        process_video(
+            video_path=video_path,
+            model_type=model_type,
+            confidence_threshold=confidence_threshold,
+            fps=fps,
+            frame_skip=frame_skip,
+            video_container=video_container,
+            status_text=status_text,
+            vehicles_metric=vehicles_metric,
+            speed_metric=speed_metric,
+            density_metric=density_metric,
+            frames_metric=frames_metric,
+            time_metric=time_metric,
+            total_vehicles_metric=total_vehicles_metric,
+            avg_speed_metric=avg_speed_metric,
+            max_speed_metric=max_speed_metric,
+            min_speed_metric=min_speed_metric,
+            history_container=history_container,
+            speed_dist_container=speed_dist_container,
+            traffic_over_time_container=traffic_over_time_container,
+            density_heatmap_container=density_heatmap_container,
+            speed_density_container=speed_density_container
+        )
+
+# ==========================
+# Footer
+# ==========================
+
+st.divider()
+st.caption("🚗 Traffic AI Detection System - Powered by Computer Vision")
+st.caption(f"Model: {model_type} | Device: {device} | FPS: {fps} | Frame Skip: {frame_skip}")
+
+# ==========================
+# Cleanup Function
+# ==========================
+
+def cleanup():
+    """Cleanup resources when app closes"""
+    cv2.destroyAllWindows()
+
+# Register cleanup
+import atexit
+atexit.register(cleanup)

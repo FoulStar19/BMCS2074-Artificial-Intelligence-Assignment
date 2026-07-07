@@ -1,0 +1,23 @@
+# Dataset paths
+path: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\  # Dataset root directory
+train: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\Training  # Train images relative to path
+val: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\Validation  # Validation images relative to path
+
+# Number of classes
+nc: 5 
+
+# Class names
+names:
+  0: car
+  1: truck
+  2: bus
+  3: motorcycle
+  4: bicycle
+
+# Class colors for visualization
+colors:
+  0: [255, 0, 0]    # Red for car
+  1: [0, 255, 0]    # Green for truck
+  2: [0, 0, 255]    # Blue for bus
+  3: [255, 255, 0]  # Cyan for motorcycle
+  4: [255, 0, 255]  # Magenta for bicycle
