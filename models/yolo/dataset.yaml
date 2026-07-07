@@ -1,10 +1,7 @@
-# Dataset configuration for YOLO vehicle detection
-# This file defines the dataset structure and classes
-
 # Dataset paths
-path: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\images  # Dataset root directory
-train: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\train\images  # Train images relative to path
-val: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\val\images  # Validation images relative to path
+path: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\  # Dataset root directory
+train: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\Training  # Train images relative to path
+val: C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\Validation  # Validation images relative to path
 
 # Number of classes
 nc: 5 
