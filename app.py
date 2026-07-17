@@ -688,22 +688,54 @@ def process_video_with_models(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"processed_{timestamp}.mp4"
     
-    # Try different codecs
-    codecs = ['avc1', 'mp4v', 'X264']
-    out = None
+    # Try different codecs - expanded list with more options
+    codecs = [
+        ('mp4v', 'mp4v'),  # MPEG-4 codec
+        ('X264', 'X264'),  # H.264
+        ('avc1', 'avc1'),  # H.264
+        ('H264', 'H264'),  # H.264
+        ('XVID', 'XVID'),  # Xvid
+        ('MJPG', 'MJPG'),  # Motion JPEG
+        ('DIVX', 'DIVX'),  # DivX
+        ('FMP4', 'FMP4'),  # FFmpeg MPEG-4
+    ]
     
-    for codec in codecs:
+    out = None
+    selected_codec = None
+    
+    for codec_name, codec_fourcc in codecs:
         try:
-            fourcc = cv2.VideoWriter_fourcc(*codec)
-            out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
-            if out.isOpened():
-                print(f"Using codec: {codec}")
+            fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+            test_writer = cv2.VideoWriter(
+                str(output_path), 
+                fourcc, 
+                actual_output_fps, 
+                (width, height)
+            )
+            if test_writer.isOpened():
+                out = test_writer
+                selected_codec = codec_name
+                print(f"✅ Using codec: {codec_name}")
                 break
-        except:
+            else:
+                test_writer.release()
+        except Exception as e:
+            print(f"Codec {codec_name} failed: {e}")
             continue
     
+    # If all codecs fail, try with AVI container
     if out is None or not out.isOpened():
-        raise ValueError("Could not create video writer")
+        output_path = output_dir / f"processed_{timestamp}.avi"
+        try:
+            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
+            if out.isOpened():
+                selected_codec = 'MJPG (AVI)'
+                print("✅ Using MJPG codec with AVI container")
+            else:
+                raise ValueError("Could not create video writer with any codec")
+        except Exception as e:
+            raise ValueError(f"Could not create video writer: {e}")
     
     results = {
         'frames': [],
@@ -846,29 +878,267 @@ def process_video_with_models(
     
     print(f"✅ Processing complete! Output saved to: {output_path}")
     print(f"📊 Processed {processed_count} frames, {results['total_vehicles']} vehicles detected")
+    print(f"🎥 Codec used: {selected_codec}")
     
     # Create compressed version for display if needed
     output_path_str = str(output_path)
     file_size_mb = os.path.getsize(output_path_str) / (1024 * 1024)
     display_path = output_path_str
     
-    if file_size_mb > 50:
-        print(f"⚠️ Video file is large ({file_size_mb:.1f} MB). Creating compressed version...")
+    # If file is too large or is AVI, convert to MP4 for better compatibility
+    if file_size_mb > 50 or output_path.suffix == '.avi':
+        print(f"⚠️ Video file is large ({file_size_mb:.1f} MB) or AVI format. Creating compressed MP4...")
         compressed_path = str(output_dir / f"compressed_{timestamp}.mp4")
         
         # Try ffmpeg first
         compressed = compress_video_ffmpeg(output_path_str, compressed_path, quality=28)
         
-        # Fallback to OpenCV
+        # If ffmpeg fails, try OpenCV conversion
         if compressed is None:
-            compressed = compress_video_opencv(output_path_str, compressed_path)
+            compressed = convert_to_mp4_opencv(output_path_str, compressed_path)
         
         if compressed and os.path.exists(compressed):
             compressed_size = os.path.getsize(compressed) / (1024 * 1024)
-            print(f"✅ Compressed video created: {compressed} ({compressed_size:.1f} MB)")
+            print(f"✅ Converted/compressed video created: {compressed} ({compressed_size:.1f} MB)")
             display_path = compressed
     
     return display_path, results
+
+
+def convert_to_mp4_opencv(input_path, output_path):
+    """
+    Convert video to MP4 format using OpenCV
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for output video
+    
+    Returns:
+        Path to converted video or None if failed
+    """
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return None
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Try different MP4 codecs
+        codecs = [
+            ('mp4v', 'mp4v'),
+            ('X264', 'X264'),
+            ('avc1', 'avc1'),
+        ]
+        
+        out = None
+        for codec_name, codec_fourcc in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"✅ Converting with codec: {codec_name}")
+                    break
+                else:
+                    out.release()
+                    out = None
+            except:
+                continue
+        
+        if out is None:
+            return None
+        
+        # Copy frames
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            out.write(frame)
+            frame_count += 1
+            
+            if frame_count % 100 == 0 and total_frames > 0:
+                print(f"Converting: {frame_count}/{total_frames} frames")
+        
+        cap.release()
+        out.release()
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"Error converting video: {e}")
+        return None
+
+
+def compress_video_ffmpeg(input_path, output_path=None, quality=28):
+    """
+    Compress video using ffmpeg
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for compressed video (optional)
+        quality: CRF value (higher = smaller file)
+    
+    Returns:
+        Path to compressed video or None if failed
+    """
+    if output_path is None:
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        output_dir = os.path.dirname(input_path)
+        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
+    
+    try:
+        # Check if ffmpeg is available
+        try:
+            subprocess.run(['ffmpeg', '-version'], 
+                         capture_output=True, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            return None
+        
+        # Check if input file exists
+        if not os.path.exists(input_path):
+            return None
+        
+        # Compress video with more robust settings
+        cmd = [
+            'ffmpeg',
+            '-i', input_path,
+            '-c:v', 'libx264',
+            '-crf', str(quality),
+            '-preset', 'medium',
+            '-c:a', 'aac',
+            '-b:a', '64k',
+            '-movflags', '+faststart',
+            '-y',
+            output_path
+        ]
+        
+        # Add -hwaccel if available (for faster processing)
+        try:
+            # Check if hardware acceleration is available
+            subprocess.run(['ffmpeg', '-hwaccels'], capture_output=True, check=True)
+            cmd.insert(1, '-hwaccel')
+            cmd.insert(2, 'cuda')  # For NVIDIA GPUs
+        except:
+            pass
+        
+        # Run ffmpeg
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(f"FFmpeg error: {result.stderr}")
+            return None
+        
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error compressing video with ffmpeg: {e}")
+        return None
+
+
+def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
+    """
+    Compress video using OpenCV
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for compressed video (optional)
+        target_size_mb: Target file size in MB
+    
+    Returns:
+        Path to compressed video or None if failed
+    """
+    if output_path is None:
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        output_dir = os.path.dirname(input_path)
+        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
+    
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return None
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Reduce resolution for smaller file
+        target_width = 640
+        if width > target_width:
+            scale = target_width / width
+            new_width = target_width
+            new_height = int(height * scale)
+        else:
+            new_width = width
+            new_height = height
+        
+        # Try different codecs
+        codecs = [
+            ('mp4v', 'mp4v'),
+            ('X264', 'X264'),
+            ('avc1', 'avc1'),
+        ]
+        
+        out = None
+        for codec_name, codec_fourcc in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
+                if out.isOpened():
+                    break
+                else:
+                    out.release()
+                    out = None
+            except:
+                continue
+        
+        if out is None:
+            return None
+        
+        # Process frames
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Resize if needed
+            if new_width != width:
+                frame = cv2.resize(frame, (new_width, new_height))
+            
+            # Reduce quality
+            encode_param = [cv2.IMWRITE_JPEG_QUALITY, 70]
+            _, frame_compressed = cv2.imencode('.jpg', frame, encode_param)
+            frame = cv2.imdecode(frame_compressed, cv2.IMREAD_COLOR)
+            
+            out.write(frame)
+            frame_count += 1
+            
+            if frame_count % 100 == 0 and total_frames > 0:
+                print(f"Compressing: {frame_count}/{total_frames} frames")
+        
+        cap.release()
+        out.release()
+        
+        if os.path.exists(output_path):
+            compressed_size = os.path.getsize(output_path) / (1024 * 1024)
+            original_size = os.path.getsize(input_path) / (1024 * 1024)
+            
+            if compressed_size < original_size:
+                return output_path
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error compressing video with OpenCV: {e}")
+        return None
 
 # ==========================
 # RESULTS DISPLAY
