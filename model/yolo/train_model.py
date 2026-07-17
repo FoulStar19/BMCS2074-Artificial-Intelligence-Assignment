@@ -57,7 +57,7 @@ def train_model():
     # Training with dynamic naming
     model.train(
         data="C:\\Users\\fouls\\Downloads\\TARUMT\\Y2S1\\AI\\BMCS2074-Artificial-Intelligence-Assignment\\model\\yolo\\dataset.yaml",
-        epochs=100,
+        epochs=500,
         imgsz=640,
         batch=11,  
         device=0,  
