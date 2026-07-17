@@ -113,12 +113,12 @@ def get_available_models():
     
     # Check multiple possible locations for models
     possible_paths = [
-        Path("models/yolo/runs"),
-        Path("models/runs"),
+        Path("model/yolo/runs"),
+        Path("model/runs"),
         Path("runs"),
         Path("yolo/runs"),
         Path("cnn/runs"),
-        Path("models/cnn/runs"),
+        Path("model/cnn/runs"),
     ]
     
     # Also check specific paths based on your structure
