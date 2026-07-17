@@ -68,10 +68,10 @@ class YOLODetector:
         # Check multiple possible locations
         yaml_paths = [
             "dataset.yaml",
-            "models/yolo/dataset.yaml",
+            "model/yolo/dataset.yaml",
             "config/dataset.yaml",
             Path(__file__).parent.parent / "dataset.yaml",
-            Path(__file__).parent.parent / "models" / "yolo" / "dataset.yaml",
+            Path(__file__).parent.parent / "model" / "yolo" / "dataset.yaml",
         ]
         
         for yaml_path in yaml_paths:
