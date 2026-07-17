@@ -111,6 +111,9 @@ def get_available_models():
     """
     models = {}
     
+    # Get the current directory
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    
     # Check multiple possible locations for models
     possible_paths = [
         Path("model/yolo/runs"),
@@ -119,73 +122,128 @@ def get_available_models():
         Path("yolo/runs"),
         Path("cnn/runs"),
         Path("model/cnn/runs"),
+        current_dir / "model" / "yolo" / "runs",
+        current_dir / "model" / "runs",
+        current_dir / "yolo" / "runs",
+        current_dir / "runs",
+        # Add your specific path
+        Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs"),
     ]
     
-    # Also check specific paths based on your structure
-    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    possible_paths.extend([
-        current_dir / "model" / "yolo" / "runs",
-        current_dir / "model" / "cnn" / "runs",
-        current_dir / "yolo" / "runs",
-        current_dir / "cnn" / "runs",
-        current_dir / "runs",
-    ])
+    print("🔍 Searching for models in:")
+    for runs_path in possible_paths:
+        print(f"  - {runs_path}")
     
     for runs_path in possible_paths:
         if runs_path.exists():
-            print(f"Checking runs directory: {runs_path}")
-            # Look for train directories
-            train_dirs = glob.glob(str(runs_path / "train*"))
-            train_dirs.extend(glob.glob(str(runs_path / "train")))
+            print(f"✅ Checking runs directory: {runs_path}")
             
+            # First, look for version directories (v1, v2, etc.)
+            version_dirs = [d for d in runs_path.iterdir() if d.is_dir() and d.name.startswith('v')]
+            
+            # Also look for train directories directly
+            train_dirs = []
+            
+            # Check each version directory
+            for version_dir in version_dirs:
+                print(f"  📁 Checking version: {version_dir.name}")
+                
+                # Look for train directories inside version
+                for sub_dir in version_dir.iterdir():
+                    if sub_dir.is_dir() and (sub_dir.name.startswith('train') or sub_dir.name == 'train'):
+                        train_dirs.append(sub_dir)
+                        print(f"    Found train dir: {sub_dir}")
+                
+                # Also check for weights directly in version dir
+                weights_dir = version_dir / "weights"
+                if weights_dir.exists():
+                    for pt_file in weights_dir.glob("*.pt"):
+                        version_name = f"{version_dir.name}/{pt_file.stem}"
+                        models[version_name] = str(pt_file)
+                        print(f"    Found model: {version_name} -> {pt_file}")
+            
+            # Also look for train directories directly (not in version folders)
+            for item in runs_path.iterdir():
+                if item.is_dir() and (item.name.startswith('train') or item.name == 'train'):
+                    if item not in train_dirs:
+                        train_dirs.append(item)
+                        print(f"  Found train dir: {item}")
+            
+            # Process all train directories
             for train_dir in train_dirs:
-                train_path = Path(train_dir)
-                if train_path.is_dir():
-                    # Check for weights directory
-                    weights_dir = train_path / "weights"
-                    if weights_dir.exists():
-                        # Look for best.pt
-                        best_pt = weights_dir / "best.pt"
-                        if best_pt.exists():
-                            version_name = train_path.name
-                            models[version_name] = str(best_pt)
-                            print(f"Found model: {version_name} -> {best_pt}")
+                weights_dir = train_dir / "weights"
+                if weights_dir.exists():
+                    print(f"  📂 Checking weights in: {weights_dir}")
+                    
+                    # Look for best.pt
+                    best_pt = weights_dir / "best.pt"
+                    if best_pt.exists():
+                        # Try to get version name from parent directory
+                        parent_name = train_dir.parent.name
+                        if parent_name.startswith('v'):
+                            version_name = f"{parent_name}/{train_dir.name}"
+                        else:
+                            version_name = train_dir.name
                         
-                        # Also look for other .pt files
-                        for pt_file in weights_dir.glob("*.pt"):
-                            if pt_file.name != "best.pt":
-                                version_name = f"{train_path.name}/{pt_file.stem}"
+                        # Make sure we don't duplicate
+                        if version_name not in models:
+                            models[version_name] = str(best_pt)
+                            print(f"  ✅ Found model: {version_name} -> {best_pt}")
+                    
+                    # Also look for other .pt files
+                    for pt_file in weights_dir.glob("*.pt"):
+                        if pt_file.name != "best.pt":
+                            parent_name = train_dir.parent.name
+                            if parent_name.startswith('v'):
+                                version_name = f"{parent_name}/{train_dir.name}/{pt_file.stem}"
+                            else:
+                                version_name = f"{train_dir.name}/{pt_file.stem}"
+                            
+                            if version_name not in models:
                                 models[version_name] = str(pt_file)
-                                print(f"Found model: {version_name} -> {pt_file}")
+                                print(f"  ✅ Found model: {version_name} -> {pt_file}")
     
     # If no models found, try to find any .pt file in the directory
     if not models:
-        print("No models found in runs directories, searching for .pt files...")
+        print("🔍 No models found in runs directories, searching for .pt files...")
         search_paths = [
             current_dir,
             current_dir / "model",
             current_dir / "model" / "yolo",
-            current_dir / "model" / "cnn",
+            current_dir / "yolo",
+            Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment"),
         ]
         
         for search_path in search_paths:
             if search_path.exists():
+                print(f"  Searching in: {search_path}")
                 pt_files = list(search_path.glob("**/*.pt"))
                 for pt_file in pt_files:
                     # Skip if in runs directory (already checked)
                     if "runs" in str(pt_file):
                         continue
+                    # Skip if in venv or site-packages
+                    if "venv" in str(pt_file) or "site-packages" in str(pt_file):
+                        continue
                     version_name = f"{pt_file.parent.name}/{pt_file.stem}"
-                    models[version_name] = str(pt_file)
-                    print(f"Found model: {version_name} -> {pt_file}")
+                    if version_name not in models:
+                        models[version_name] = str(pt_file)
+                        print(f"  Found model: {version_name} -> {pt_file}")
     
-    # If still no models, try default path
+    # Specifically check for your model path
+    specific_model_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt")
+    if specific_model_path.exists():
+        models["v1/train/best"] = str(specific_model_path)
+        print(f"✅ Found specific model: v1/train/best -> {specific_model_path}")
+    
+    # If still no models, try to use the yolov8n.pt or similar
     if not models:
-        default_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\yolo26n.pt")
-        if default_path.exists():
-            models["default"] = str(default_path)
-            print(f"Using default model: {default_path}")
+        default_model = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\yolo26n.pt")
+        if default_model.exists():
+            models["default"] = str(default_model)
+            print(f"Using default model: {default_model}")
     
+    print(f"📊 Found {len(models)} model(s): {list(models.keys())}")
     return models
 
 def load_dataset_yaml():
