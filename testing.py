@@ -9,9 +9,9 @@ from ultralytics import YOLO
 from collections import defaultdict
 
 # --- Configuration ---
-VIDEO_PATH = r"C:/Users/fouls/Downloads/TARUMT/Y2S1/AI/BMCS2074-Artificial-Intelligence-Assignment/input/raw_videos/video1.mp4"
-OUTPUT_FOLDER = r"C:/Users/fouls/Downloads/TARUMT/Y2S1/AI/BMCS2074-Artificial-Intelligence-Assignment/output/processed_videos"
-DETECTION_MODEL_PATH = r"C:/Users/fouls/Downloads/TARUMT/Y2S1/AI/BMCS2074-Artificial-Intelligence-Assignment/model/yolo/runs/train/weights/best.pt"
+VIDEO_PATH = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\video1.mp4"
+OUTPUT_FOLDER = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\output\processed_videos"
+DETECTION_MODEL_PATH = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt"
 CONF_THRESHOLD = 0.25
 MIN_WIDTH = 0
 DEVICE = "cuda"
