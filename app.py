@@ -102,6 +102,99 @@ def initialize_session_state():
     if 'video_processed' not in st.session_state:
         st.session_state.video_processed = False
 
+def get_video_base64(video_path):
+    """
+    Convert video file to base64 for HTML5 video player
+    
+    Args:
+        video_path: Path to video file
+    
+    Returns:
+        Base64 encoded video string
+    """
+    import base64
+    
+    # Read video in chunks to avoid memory issues
+    chunk_size = 1024 * 1024  # 1MB chunks
+    encoded_string = ""
+    
+    with open(video_path, 'rb') as video_file:
+        while True:
+            chunk = video_file.read(chunk_size)
+            if not chunk:
+                break
+            encoded_string += base64.b64encode(chunk).decode('utf-8')
+    
+    return encoded_string
+
+
+def compress_video(input_path, output_path=None, target_size_mb=20):
+    """
+    Compress video to reduce file size
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for compressed video (optional)
+        target_size_mb: Target file size in MB
+    
+    Returns:
+        Path to compressed video or None if failed
+    """
+    if output_path is None:
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        output_dir = os.path.dirname(input_path)
+        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
+    
+    # Check if already compressed
+    current_size = os.path.getsize(input_path) / (1024 * 1024)
+    if current_size <= target_size_mb:
+        return input_path
+    
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return None
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Calculate target bitrate
+        target_bitrate = int(target_size_mb * 8 * 1024 * 1024 / (total_frames / fps))
+        
+        # Create video writer with lower quality settings
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        # Process frames
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Compress frame (reduce quality)
+            encode_param = [cv2.IMWRITE_JPEG_QUALITY, 70]
+            _, frame_compressed = cv2.imencode('.jpg', frame, encode_param)
+            frame = cv2.imdecode(frame_compressed, cv2.IMREAD_COLOR)
+            
+            out.write(frame)
+            frame_count += 1
+            
+            # Progress
+            if frame_count % 100 == 0:
+                print(f"Compressing video: {frame_count}/{total_frames} frames")
+        
+        cap.release()
+        out.release()
+        
+        return output_path
+    
+    except Exception as e:
+        print(f"Error compressing video: {e}")
+        return None
+
 def get_available_models():
     """
     Get available model versions from runs folder
@@ -383,6 +476,9 @@ def process_video_with_models(
         frame_skip: Process every Nth frame
         progress_callback: Callback for progress updates
         target_fps: Target FPS for output video (default: 60)
+    
+    Returns:
+        Tuple of (display_video_path, results_dict)
     """
     # Initialize components
     try:
@@ -425,15 +521,24 @@ def process_video_with_models(
     
     print(f"Original FPS: {original_fps}, Target FPS: {target_fps}, Interpolation: {interpolation_factor}")
     
-    # Create output video writer
+    # Create output video directory
     output_dir = Path("outputs/processed_videos")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"processed_{timestamp}.mp4"
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
+    # Use H.264 codec for better compression
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')  # H.264 codec
+    try:
+        out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
+        if not out.isOpened():
+            # Fallback to MP4V
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
+    except:
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
     
     # Storage for results (limit to prevent memory issues)
     max_results_frames = 500
@@ -458,7 +563,6 @@ def process_video_with_models(
     prev_detections = None
     
     # For batch processing to improve performance
-    batch_size = 5
     frame_buffer = []
     
     try:
@@ -543,11 +647,19 @@ def process_video_with_models(
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                               (255, 255, 255), 2)
                 
-                # Add info overlay
+                # Add info overlay with timestamp
                 overlay_text = f"Detections: {len(detections)} | Frames: {processed_count}"
                 cv2.putText(processed_frame, overlay_text,
                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                           0.7, (0, 255, 255), 2)
+                
+                # Add FPS counter
+                elapsed = time.time() - start_time
+                if elapsed > 0:
+                    current_fps = processed_count / elapsed
+                    cv2.putText(processed_frame, f"FPS: {current_fps:.1f}",
+                              (10, 60), cv2.FONT_HERSHEY_SIMPLEX,
+                              0.7, (0, 255, 255), 2)
                 
                 # Write processed frame
                 out.write(processed_frame)
@@ -588,10 +700,9 @@ def process_video_with_models(
         gc.collect()
         raise
     finally:
-        # Clean up resources - REMOVED cv2.destroyAllWindows()
+        # Clean up resources
         cap.release()
         out.release()
-        # cv2.destroyAllWindows()  # <-- REMOVE THIS LINE
     
     # Calculate final statistics
     results['processing_time'] = time.time() - start_time
@@ -607,7 +718,121 @@ def process_video_with_models(
     print(f"✅ Processing complete! Output saved to: {output_path}")
     print(f"📊 Processed {processed_count} frames, {results['total_vehicles']} vehicles detected")
     
-    return str(output_path), results
+    # Check file size and create compressed version if needed
+    output_path_str = str(output_path)
+    file_size_mb = os.path.getsize(output_path_str) / (1024 * 1024)
+    display_path = output_path_str
+    
+    if file_size_mb > 50:
+        print(f"⚠️ Video file is large ({file_size_mb:.1f} MB). Creating compressed version for display...")
+        compressed_path = str(output_dir / f"compressed_{timestamp}.mp4")
+        
+        try:
+            # Try to use ffmpeg for better compression
+            import subprocess
+            
+            # Check if ffmpeg is available
+            try:
+                subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
+                ffmpeg_available = True
+            except:
+                ffmpeg_available = False
+            
+            if ffmpeg_available:
+                # Use ffmpeg for better compression
+                subprocess.run([
+                    'ffmpeg', '-i', output_path_str,
+                    '-c:v', 'libx264', '-crf', '28',
+                    '-preset', 'fast',
+                    '-c:a', 'aac', '-b:a', '64k',
+                    '-movflags', '+faststart',
+                    compressed_path
+                ], capture_output=True, check=False)
+                
+                if os.path.exists(compressed_path):
+                    compressed_size = os.path.getsize(compressed_path) / (1024 * 1024)
+                    print(f"✅ Compressed video created: {compressed_path} ({compressed_size:.1f} MB)")
+                    display_path = compressed_path
+                else:
+                    display_path = output_path_str
+            else:
+                # Try OpenCV compression
+                print("⚠️ ffmpeg not available, trying OpenCV compression...")
+                compressed_path = compress_video_open_cv(output_path_str, compressed_path)
+                if compressed_path and os.path.exists(compressed_path):
+                    compressed_size = os.path.getsize(compressed_path) / (1024 * 1024)
+                    print(f"✅ Compressed video created: {compressed_path} ({compressed_size:.1f} MB)")
+                    display_path = compressed_path
+                else:
+                    display_path = output_path_str
+        except Exception as e:
+            print(f"⚠️ Error creating compressed video: {e}")
+            display_path = output_path_str
+    
+    return display_path, results
+
+
+def compress_video_open_cv(input_path, output_path, target_size_mb=20):
+    """
+    Compress video using OpenCV
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for compressed video
+        target_size_mb: Target file size in MB
+    
+    Returns:
+        Path to compressed video or None if failed
+    """
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            return None
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        # Calculate target bitrate (simplified)
+        target_bitrate = int(target_size_mb * 8 * 1024 * 1024 / (total_frames / fps)) if total_frames > 0 else 1000000
+        
+        # Create video writer with lower quality
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        # Process frames with quality reduction
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Reduce quality by resizing (optional)
+            if width > 640:
+                new_width = 640
+                new_height = int(height * (640 / width))
+                frame = cv2.resize(frame, (new_width, new_height))
+            
+            # Compress frame
+            encode_param = [cv2.IMWRITE_JPEG_QUALITY, 70]
+            _, frame_compressed = cv2.imencode('.jpg', frame, encode_param)
+            frame = cv2.imdecode(frame_compressed, cv2.IMREAD_COLOR)
+            
+            out.write(frame)
+            frame_count += 1
+            
+            if frame_count % 100 == 0:
+                print(f"Compressing video: {frame_count}/{total_frames} frames")
+        
+        cap.release()
+        out.release()
+        
+        return output_path
+    
+    except Exception as e:
+        print(f"Error compressing video with OpenCV: {e}")
+        return None
 
 def calculate_density(detections, frame_shape):
     """
@@ -663,23 +888,74 @@ def display_results(results, output_video_path):
     if output_video_path and os.path.exists(output_video_path):
         st.subheader("📹 Processed Video")
         
-        # Check file size and display
+        # Check file size
         file_size = os.path.getsize(output_video_path) / (1024 * 1024)  # MB
-        if file_size > 100:  # If file is too large, show warning
-            st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). May take time to load.")
         
-        with open(output_video_path, 'rb') as f:
-            video_bytes = f.read()
-        st.video(video_bytes)
+        # Create columns for video and controls
+        video_col1, video_col2 = st.columns([3, 1])
         
-        # Download button
-        with open(output_video_path, 'rb') as f:
-            st.download_button(
-                label="📥 Download Processed Video",
-                data=f,
-                file_name=os.path.basename(output_video_path),
-                mime="video/mp4"
-            )
+        with video_col1:
+            # If video is large, use HTML5 video player with limited buffering
+            if file_size > 50:  # If file is larger than 50MB
+                st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). Using streaming player...")
+                
+                # Use HTML5 video with streaming
+                import base64
+                
+                # Get video duration for better player control
+                cap = cv2.VideoCapture(output_video_path)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration = total_frames / fps if fps > 0 else 0
+                cap.release()
+                
+                # Create HTML5 video player with controls
+                video_html = f"""
+                <video width="100%" controls autoplay muted>
+                    <source src="data:video/mp4;base64,{get_video_base64(output_video_path)}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+                <p style="color: #666; font-size: 12px; margin-top: 5px;">
+                    Duration: {duration:.1f}s | Size: {file_size:.1f} MB
+                </p>
+                """
+                st.markdown(video_html, unsafe_allow_html=True)
+            else:
+                # For smaller videos, use Streamlit's built-in video player
+                with open(output_video_path, 'rb') as f:
+                    video_bytes = f.read()
+                st.video(video_bytes)
+        
+        with video_col2:
+            st.write("**📥 Download Options**")
+            
+            # Download button with file info
+            with open(output_video_path, 'rb') as f:
+                video_data = f.read()
+                st.download_button(
+                    label=f"📥 Download Video ({file_size:.1f} MB)",
+                    data=video_data,
+                    file_name=os.path.basename(output_video_path),
+                    mime="video/mp4",
+                    use_container_width=True
+                )
+            
+            # Also provide a compressed download option if file is large
+            if file_size > 20:
+                if st.button("📦 Compress & Download", use_container_width=True):
+                    try:
+                        compressed_path = compress_video(output_video_path)
+                        if compressed_path:
+                            with open(compressed_path, 'rb') as f:
+                                st.download_button(
+                                    label="✅ Download Compressed Video",
+                                    data=f.read(),
+                                    file_name=f"compressed_{os.path.basename(output_video_path)}",
+                                    mime="video/mp4",
+                                    use_container_width=True
+                                )
+                    except Exception as e:
+                        st.error(f"Error compressing video: {e}")
     
     # Display graphs only if we have data
     if results['frames']:
@@ -710,7 +986,8 @@ def display_results(results, output_video_path):
             title='Vehicle Count Over Time',
             xaxis_title='Frame Number',
             yaxis_title='Number of Vehicles',
-            height=300
+            height=300,
+            hovermode='x unified'
         )
         st.plotly_chart(fig1, use_container_width=True)
         
@@ -721,13 +998,15 @@ def display_results(results, output_video_path):
                 x=speed_df['Speed'],
                 nbinsx=20,
                 marker_color='green',
-                opacity=0.7
+                opacity=0.7,
+                name='Speed Distribution'
             ))
             fig2.update_layout(
                 title='Speed Distribution',
                 xaxis_title='Speed (km/h)',
                 yaxis_title='Frequency',
-                height=300
+                height=300,
+                bargap=0.1
             )
         else:
             fig2.add_annotation(
@@ -751,8 +1030,23 @@ def display_results(results, output_video_path):
                     opacity=0.6,
                     showscale=False
                 ),
-                name='Data Points'
+                name='Data Points',
+                hovertemplate='Speed: %{x:.1f} km/h<br>Density: %{y:.1f}%<extra></extra>'
             ))
+            
+            # Add trend line if enough points
+            if len(speed_df) > 5:
+                z = np.polyfit(speed_df['Speed'], speed_df['Density'], 1)
+                p = np.poly1d(z)
+                x_trend = np.linspace(speed_df['Speed'].min(), speed_df['Speed'].max(), 100)
+                fig3.add_trace(go.Scatter(
+                    x=x_trend,
+                    y=p(x_trend),
+                    mode='lines',
+                    name='Trend Line',
+                    line=dict(color='red', width=2, dash='dash')
+                ))
+            
             fig3.update_layout(
                 title='Speed vs Traffic Density',
                 xaxis_title='Speed (km/h)',
@@ -769,8 +1063,8 @@ def display_results(results, output_video_path):
         st.plotly_chart(fig3, use_container_width=True)
         
         # Display data table
-        with st.expander("📋 View Detailed Data"):
-            st.dataframe(df, use_container_width=True)
+        with st.expander("📋 View Detailed Data", expanded=False):
+            st.dataframe(df, use_container_width=True, height=300)
             
             # Download CSV
             csv = df.to_csv(index=False)
