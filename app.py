@@ -181,7 +181,7 @@ def get_available_models():
     
     # If still no models, try default path
     if not models:
-        default_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt")
+        default_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\yolo26n.pt")
         if default_path.exists():
             models["default"] = str(default_path)
             print(f"Using default model: {default_path}")
@@ -198,7 +198,7 @@ def load_dataset_yaml():
     # Check multiple possible locations
     yaml_paths = [
         Path("dataset.yaml"),
-        Path("models/yolo/dataset.yaml"),
+        Path("model/yolo/dataset.yaml"),
         Path("config/dataset.yaml"),
         Path("dataset/dataset.yaml"),
         Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset.yaml"),
@@ -208,7 +208,7 @@ def load_dataset_yaml():
     current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     yaml_paths.extend([
         current_dir / "dataset.yaml",
-        current_dir / "models" / "yolo" / "dataset.yaml",
+        current_dir / "model" / "yolo" / "dataset.yaml",
         current_dir / "config" / "dataset.yaml",
     ])
     
@@ -767,7 +767,7 @@ def main():
             st.caption(f"Path: {model_path}")
         else:
             st.warning("⚠️ No trained models found in runs folder!")
-            st.info("📁 Expected location: `models/yolo/runs/train*/weights/best.pt`")
+            st.info("📁 Expected location: `model/yolo/runs/train*/weights/best.pt`")
             model_path = None
             selected_model = "None"
         
