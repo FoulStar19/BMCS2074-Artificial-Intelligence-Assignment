@@ -124,8 +124,8 @@ def get_available_models():
     # Also check specific paths based on your structure
     current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     possible_paths.extend([
-        current_dir / "models" / "yolo" / "runs",
-        current_dir / "models" / "cnn" / "runs",
+        current_dir / "model" / "yolo" / "runs",
+        current_dir / "model" / "cnn" / "runs",
         current_dir / "yolo" / "runs",
         current_dir / "cnn" / "runs",
         current_dir / "runs",
@@ -163,9 +163,9 @@ def get_available_models():
         print("No models found in runs directories, searching for .pt files...")
         search_paths = [
             current_dir,
-            current_dir / "models",
-            current_dir / "yolo",
-            current_dir / "cnn",
+            current_dir / "model",
+            current_dir / "model" / "yolo",
+            current_dir / "model" / "cnn",
         ]
         
         for search_path in search_paths:
