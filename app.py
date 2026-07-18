@@ -25,6 +25,8 @@ import warnings
 import base64
 import subprocess
 from collections import deque
+import json
+import random
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -108,6 +110,24 @@ st.markdown("""
         border-radius: 4px;
         margin: 0.5rem 0;
     }
+    .success-box {
+        padding: 1rem;
+        background-color: #e8f5e9;
+        border-left: 4px solid #4CAF50;
+        border-radius: 4px;
+        margin: 0.5rem 0;
+    }
+    .error-box {
+        padding: 1rem;
+        background-color: #ffebee;
+        border-left: 4px solid #f44336;
+        border-radius: 4px;
+        margin: 0.5rem 0;
+    }
+    .stAlert {
+        padding: 1rem;
+        border-radius: 8px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -168,7 +188,10 @@ def initialize_session_state():
         'video_processed': False,
         'uploaded_video_path': None,
         'model_loaded': False,
-        'processing_complete': False
+        'processing_complete': False,
+        'processing_error': None,
+        'output_video_path': None,
+        'results_ready': False
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -194,6 +217,11 @@ def handle_file_upload(uploaded_file):
         uploaded_file.seek(0)
         
         file_size_mb = file_size / (1024 * 1024)
+        
+        # Check file size limit (200MB)
+        if file_size_mb > 200:
+            st.error(f"❌ File too large: {file_size_mb:.1f}MB. Maximum is 200MB.")
+            return None
         
         # Create temp file with proper extension
         file_extension = os.path.splitext(uploaded_file.name)[1]
@@ -297,20 +325,34 @@ def compress_video_ffmpeg(input_path, output_path=None, quality=28):
         except (subprocess.CalledProcessError, FileNotFoundError):
             return None
         
-        # Compress video
+        # Check if input file exists
+        if not os.path.exists(input_path):
+            return None
+        
+        # Compress video with more robust settings
         cmd = [
-            'ffmpeg', '-i', input_path,
-            '-c:v', 'libx264', '-crf', str(quality),
-            '-preset', 'fast',
-            '-c:a', 'aac', '-b:a', '64k',
+            'ffmpeg',
+            '-i', input_path,
+            '-c:v', 'libx264',
+            '-crf', str(quality),
+            '-preset', 'medium',
+            '-c:a', 'aac',
+            '-b:a', '64k',
             '-movflags', '+faststart',
-            '-y', output_path
+            '-y',
+            output_path
         ]
         
-        subprocess.run(cmd, capture_output=True, check=True)
+        # Run ffmpeg
+        result = subprocess.run(cmd, capture_output=True, text=True)
         
-        if os.path.exists(output_path):
+        if result.returncode != 0:
+            print(f"FFmpeg error: {result.stderr}")
+            return None
+        
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
             return output_path
+        
         return None
         
     except Exception as e:
@@ -344,6 +386,10 @@ def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         
+        if width <= 0 or height <= 0:
+            cap.release()
+            return None
+        
         # Reduce resolution for smaller file
         target_width = 640
         if width > target_width:
@@ -354,9 +400,28 @@ def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
             new_width = width
             new_height = height
         
-        # Create video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
+        # Try different codecs
+        codecs = [
+            ('mp4v', 'mp4v'),
+            ('X264', 'X264'),
+            ('avc1', 'avc1'),
+        ]
+        
+        out = None
+        for codec_name, codec_fourcc in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
+                if out.isOpened():
+                    break
+                else:
+                    out.release()
+                    out = None
+            except:
+                continue
+        
+        if out is None:
+            return None
         
         # Process frames
         frame_count = 0
@@ -377,15 +442,12 @@ def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
             out.write(frame)
             frame_count += 1
             
-            # Progress update (every 100 frames)
             if frame_count % 100 == 0 and total_frames > 0:
-                progress = frame_count / total_frames
-                print(f"Compressing: {progress*100:.1f}%")
+                print(f"Compressing: {frame_count}/{total_frames} frames")
         
         cap.release()
         out.release()
         
-        # Check if compression was effective
         if os.path.exists(output_path):
             compressed_size = os.path.getsize(output_path) / (1024 * 1024)
             original_size = os.path.getsize(input_path) / (1024 * 1024)
@@ -397,6 +459,84 @@ def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
         
     except Exception as e:
         print(f"Error compressing video with OpenCV: {e}")
+        return None
+
+def convert_to_mp4_opencv(input_path, output_path):
+    """
+    Convert video to MP4 format using OpenCV
+    
+    Args:
+        input_path: Path to input video
+        output_path: Path for output video
+    
+    Returns:
+        Path to converted video or None if failed
+    """
+    try:
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            print("❌ Could not open input video for conversion")
+            return None
+        
+        fps = int(cap.get(cv2.CAP_PROP_FPS))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        if width <= 0 or height <= 0:
+            print(f"❌ Invalid dimensions: {width}x{height}")
+            cap.release()
+            return None
+        
+        # Try different MP4 codecs
+        codecs = [
+            ('mp4v', 'mp4v'),
+            ('X264', 'X264'),
+            ('avc1', 'avc1'),
+        ]
+        
+        out = None
+        for codec_name, codec_fourcc in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"✅ Converting with codec: {codec_name}")
+                    break
+                else:
+                    out.release()
+                    out = None
+            except:
+                continue
+        
+        if out is None:
+            print("❌ Could not create video writer for conversion")
+            cap.release()
+            return None
+        
+        # Copy frames
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            out.write(frame)
+            frame_count += 1
+            
+            if frame_count % 100 == 0 and total_frames > 0:
+                print(f"🔄 Converting: {frame_count}/{total_frames} frames")
+        
+        cap.release()
+        out.release()
+        
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return output_path
+        
+        return None
+        
+    except Exception as e:
+        print(f"Error converting video: {e}")
         return None
 
 # ==========================
@@ -676,46 +816,52 @@ def process_video_with_models(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
+    # Validate video properties
+    if width <= 0 or height <= 0:
+        cap.release()
+        raise ValueError(f"Invalid video dimensions: {width}x{height}")
+    
+    print(f"📹 Video info: {width}x{height}, {original_fps} FPS, {total_frames} frames")
+    
     interpolation_factor = max(1, int(target_fps / original_fps))
     if interpolation_factor > 4:
         interpolation_factor = 4
     
     actual_output_fps = original_fps * interpolation_factor
     
+    # Create output directory
     output_dir = Path("outputs/processed_videos")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = output_dir / f"processed_{timestamp}.mp4"
     
-    # Try different codecs - expanded list with more options
-    codecs = [
-        ('mp4v', 'mp4v'),  # MPEG-4 codec
-        ('X264', 'X264'),  # H.264
-        ('avc1', 'avc1'),  # H.264
-        ('H264', 'H264'),  # H.264
-        ('XVID', 'XVID'),  # Xvid
-        ('MJPG', 'MJPG'),  # Motion JPEG
-        ('DIVX', 'DIVX'),  # DivX
-        ('FMP4', 'FMP4'),  # FFmpeg MPEG-4
-    ]
-    
+    # Try to create output video with different codecs
+    output_path = None
     out = None
     selected_codec = None
     
-    for codec_name, codec_fourcc in codecs:
+    # Codec options to try (in order of preference)
+    codec_options = [
+        ('mp4v', '.mp4'),
+        ('X264', '.mp4'),
+        ('avc1', '.mp4'),
+        ('H264', '.mp4'),
+        ('MJPG', '.avi'),
+        ('DIVX', '.avi'),
+        ('XVID', '.avi'),
+    ]
+    
+    for codec_name, extension in codec_options:
         try:
-            fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
-            test_writer = cv2.VideoWriter(
-                str(output_path), 
-                fourcc, 
-                actual_output_fps, 
-                (width, height)
-            )
+            test_path = output_dir / f"processed_{timestamp}{extension}"
+            fourcc = cv2.VideoWriter_fourcc(*codec_name)
+            test_writer = cv2.VideoWriter(str(test_path), fourcc, actual_output_fps, (width, height))
+            
             if test_writer.isOpened():
                 out = test_writer
+                output_path = test_path
                 selected_codec = codec_name
-                print(f"✅ Using codec: {codec_name}")
+                print(f"✅ Using codec: {codec_name} with {extension} container")
                 break
             else:
                 test_writer.release()
@@ -723,15 +869,15 @@ def process_video_with_models(
             print(f"Codec {codec_name} failed: {e}")
             continue
     
-    # If all codecs fail, try with AVI container
     if out is None or not out.isOpened():
-        output_path = output_dir / f"processed_{timestamp}.avi"
+        # Final fallback - try with default codec
         try:
-            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+            output_path = output_dir / f"processed_{timestamp}.mp4"
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
             if out.isOpened():
-                selected_codec = 'MJPG (AVI)'
-                print("✅ Using MJPG codec with AVI container")
+                selected_codec = 'mp4v (fallback)'
+                print(f"✅ Using fallback codec: mp4v")
             else:
                 raise ValueError("Could not create video writer with any codec")
         except Exception as e:
@@ -753,9 +899,7 @@ def process_video_with_models(
     frame_count = 0
     processed_count = 0
     start_time = time.time()
-    prev_frame = None
-    prev_detections = None
-    max_results_frames = 500
+    frames_written = 0
     
     try:
         while True:
@@ -765,16 +909,21 @@ def process_video_with_models(
             
             frame_count += 1
             
+            # Process frame
             if frame_count % frame_skip != 0:
-                out.write(frame)
-                del frame
+                try:
+                    out.write(frame)
+                    frames_written += 1
+                except Exception as e:
+                    print(f"Error writing frame {frame_count}: {e}")
                 continue
             
             try:
                 detections = video_processor.process_frame_sync(frame)
                 processed_frame = frame.copy()
                 
-                if len(results['frames']) < max_results_frames:
+                # Store results (limit to 500 frames for performance)
+                if len(results['frames']) < 500:
                     results['frames'].append(frame_count)
                     results['detections'].append(len(detections))
                     results['total_vehicles'] += len(detections)
@@ -791,7 +940,7 @@ def process_video_with_models(
                 
                 processed_count += 1
                 
-                # Draw detections
+                # Draw detections on frame
                 for det in detections:
                     bbox = det.get('bbox', [0, 0, 100, 100])
                     class_id = det.get('class', 0)
@@ -803,15 +952,18 @@ def process_video_with_models(
                     if isinstance(color, list):
                         color = tuple(color)
                     
+                    # Draw rectangle
                     cv2.rectangle(processed_frame, 
                                 (bbox[0], bbox[1]), 
                                 (bbox[2], bbox[3]), 
                                 color, 2)
                     
+                    # Create label
                     label = f"{class_name} {confidence:.2f}"
                     if speed > 0:
                         label += f" {speed:.1f}km/h"
                     
+                    # Draw label background
                     (text_width, text_height), _ = cv2.getTextSize(
                         label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
                     )
@@ -820,55 +972,65 @@ def process_video_with_models(
                                 (bbox[0] + text_width, bbox[1] - 5),
                                 color, -1)
                     
+                    # Draw label text
                     cv2.putText(processed_frame, label,
                               (bbox[0], bbox[1] - 10),
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                               (255, 255, 255), 2)
                 
+                # Add overlay text
                 overlay_text = f"Detections: {len(detections)} | Frames: {processed_count}"
                 cv2.putText(processed_frame, overlay_text,
                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                           0.7, (0, 255, 255), 2)
                 
-                out.write(processed_frame)
+                # Write frame
+                try:
+                    out.write(processed_frame)
+                    frames_written += 1
+                except Exception as e:
+                    print(f"Error writing processed frame {frame_count}: {e}")
                 
-                if prev_frame is not None and interpolation_factor > 1 and prev_detections is not None:
-                    num_interpolations = min(interpolation_factor - 1, 2)
-                    for i in range(1, num_interpolations + 1):
-                        alpha = i / (num_interpolations + 1)
-                        interp_frame = cv2.addWeighted(prev_frame, 1 - alpha, processed_frame, alpha, 0)
-                        out.write(interp_frame)
-                
-                prev_frame = processed_frame.copy()
-                prev_detections = detections
-                
+                # Clean up
                 del frame
                 if processed_frame is not None:
                     del processed_frame
                 
+                # Garbage collection every 50 frames
                 if processed_count % 50 == 0:
                     gc.collect()
                 
+                # Progress callback
                 if progress_callback and total_frames > 0:
-                    progress = frame_count / total_frames
+                    progress = min(frame_count / total_frames, 1.0)
                     progress_callback(progress, frame_count, total_frames)
                 
             except Exception as e:
                 print(f"Error processing frame {frame_count}: {e}")
-                out.write(frame)
+                # Write original frame as fallback
+                try:
+                    out.write(frame)
+                    frames_written += 1
+                except:
+                    pass
                 continue
     
     except MemoryError:
         print("Memory error occurred. Running garbage collection...")
         gc.collect()
         raise
+    except Exception as e:
+        print(f"Unexpected error in processing loop: {e}")
+        raise
     finally:
         cap.release()
-        out.release()
+        if out is not None:
+            out.release()
     
     results['processing_time'] = time.time() - start_time
     results['frames_processed'] = processed_count
     
+    # Calculate statistics
     if results['speeds']:
         speeds_filtered = [s for s in results['speeds'] if s > 0]
         if speeds_filtered:
@@ -876,269 +1038,42 @@ def process_video_with_models(
             results['max_speed'] = np.max(speeds_filtered)
             results['min_speed'] = np.min(speeds_filtered)
     
-    print(f"✅ Processing complete! Output saved to: {output_path}")
+    print(f"✅ Processing complete!")
     print(f"📊 Processed {processed_count} frames, {results['total_vehicles']} vehicles detected")
+    print(f"📹 Output file: {output_path}")
+    print(f"📝 Frames written: {frames_written}")
     print(f"🎥 Codec used: {selected_codec}")
     
-    # Create compressed version for display if needed
+    # Verify output file exists and has content
     output_path_str = str(output_path)
-    file_size_mb = os.path.getsize(output_path_str) / (1024 * 1024)
     display_path = output_path_str
     
-    # If file is too large or is AVI, convert to MP4 for better compatibility
-    if file_size_mb > 50 or output_path.suffix == '.avi':
-        print(f"⚠️ Video file is large ({file_size_mb:.1f} MB) or AVI format. Creating compressed MP4...")
-        compressed_path = str(output_dir / f"compressed_{timestamp}.mp4")
+    if os.path.exists(output_path_str):
+        file_size = os.path.getsize(output_path_str) / (1024 * 1024)
+        print(f"📦 File size: {file_size:.2f} MB")
         
-        # Try ffmpeg first
-        compressed = compress_video_ffmpeg(output_path_str, compressed_path, quality=28)
+        if file_size < 0.1 and processed_count > 0:
+            print("⚠️ Warning: Output file is very small. Video may not have been written correctly.")
         
-        # If ffmpeg fails, try OpenCV conversion
-        if compressed is None:
-            compressed = convert_to_mp4_opencv(output_path_str, compressed_path)
-        
-        if compressed and os.path.exists(compressed):
-            compressed_size = os.path.getsize(compressed) / (1024 * 1024)
-            print(f"✅ Converted/compressed video created: {compressed} ({compressed_size:.1f} MB)")
-            display_path = compressed
+        # If file is AVI or too large, try to convert to MP4
+        if output_path.suffix == '.avi' or file_size > 50:
+            print("🔄 Converting to MP4 for better compatibility...")
+            mp4_path = str(output_dir / f"compressed_{timestamp}.mp4")
+            
+            # Try ffmpeg first
+            compressed = compress_video_ffmpeg(output_path_str, mp4_path, quality=28)
+            
+            # If ffmpeg fails, try OpenCV
+            if compressed is None:
+                compressed = convert_to_mp4_opencv(output_path_str, mp4_path)
+            
+            if compressed and os.path.exists(compressed) and os.path.getsize(compressed) > 0:
+                display_path = compressed
+                print(f"✅ Converted to MP4: {display_path}")
+    else:
+        print("❌ Output file was not created!")
     
     return display_path, results
-
-
-def convert_to_mp4_opencv(input_path, output_path):
-    """
-    Convert video to MP4 format using OpenCV
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for output video
-    
-    Returns:
-        Path to converted video or None if failed
-    """
-    try:
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            return None
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Try different MP4 codecs
-        codecs = [
-            ('mp4v', 'mp4v'),
-            ('X264', 'X264'),
-            ('avc1', 'avc1'),
-        ]
-        
-        out = None
-        for codec_name, codec_fourcc in codecs:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
-                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-                if out.isOpened():
-                    print(f"✅ Converting with codec: {codec_name}")
-                    break
-                else:
-                    out.release()
-                    out = None
-            except:
-                continue
-        
-        if out is None:
-            return None
-        
-        # Copy frames
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            out.write(frame)
-            frame_count += 1
-            
-            if frame_count % 100 == 0 and total_frames > 0:
-                print(f"Converting: {frame_count}/{total_frames} frames")
-        
-        cap.release()
-        out.release()
-        
-        return output_path
-        
-    except Exception as e:
-        print(f"Error converting video: {e}")
-        return None
-
-
-def compress_video_ffmpeg(input_path, output_path=None, quality=28):
-    """
-    Compress video using ffmpeg
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for compressed video (optional)
-        quality: CRF value (higher = smaller file)
-    
-    Returns:
-        Path to compressed video or None if failed
-    """
-    if output_path is None:
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_dir = os.path.dirname(input_path)
-        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
-    
-    try:
-        # Check if ffmpeg is available
-        try:
-            subprocess.run(['ffmpeg', '-version'], 
-                         capture_output=True, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return None
-        
-        # Check if input file exists
-        if not os.path.exists(input_path):
-            return None
-        
-        # Compress video with more robust settings
-        cmd = [
-            'ffmpeg',
-            '-i', input_path,
-            '-c:v', 'libx264',
-            '-crf', str(quality),
-            '-preset', 'medium',
-            '-c:a', 'aac',
-            '-b:a', '64k',
-            '-movflags', '+faststart',
-            '-y',
-            output_path
-        ]
-        
-        # Add -hwaccel if available (for faster processing)
-        try:
-            # Check if hardware acceleration is available
-            subprocess.run(['ffmpeg', '-hwaccels'], capture_output=True, check=True)
-            cmd.insert(1, '-hwaccel')
-            cmd.insert(2, 'cuda')  # For NVIDIA GPUs
-        except:
-            pass
-        
-        # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"FFmpeg error: {result.stderr}")
-            return None
-        
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error compressing video with ffmpeg: {e}")
-        return None
-
-
-def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
-    """
-    Compress video using OpenCV
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for compressed video (optional)
-        target_size_mb: Target file size in MB
-    
-    Returns:
-        Path to compressed video or None if failed
-    """
-    if output_path is None:
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_dir = os.path.dirname(input_path)
-        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
-    
-    try:
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            return None
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        # Reduce resolution for smaller file
-        target_width = 640
-        if width > target_width:
-            scale = target_width / width
-            new_width = target_width
-            new_height = int(height * scale)
-        else:
-            new_width = width
-            new_height = height
-        
-        # Try different codecs
-        codecs = [
-            ('mp4v', 'mp4v'),
-            ('X264', 'X264'),
-            ('avc1', 'avc1'),
-        ]
-        
-        out = None
-        for codec_name, codec_fourcc in codecs:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
-                out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-                if out.isOpened():
-                    break
-                else:
-                    out.release()
-                    out = None
-            except:
-                continue
-        
-        if out is None:
-            return None
-        
-        # Process frames
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Resize if needed
-            if new_width != width:
-                frame = cv2.resize(frame, (new_width, new_height))
-            
-            # Reduce quality
-            encode_param = [cv2.IMWRITE_JPEG_QUALITY, 70]
-            _, frame_compressed = cv2.imencode('.jpg', frame, encode_param)
-            frame = cv2.imdecode(frame_compressed, cv2.IMREAD_COLOR)
-            
-            out.write(frame)
-            frame_count += 1
-            
-            if frame_count % 100 == 0 and total_frames > 0:
-                print(f"Compressing: {frame_count}/{total_frames} frames")
-        
-        cap.release()
-        out.release()
-        
-        if os.path.exists(output_path):
-            compressed_size = os.path.getsize(output_path) / (1024 * 1024)
-            original_size = os.path.getsize(input_path) / (1024 * 1024)
-            
-            if compressed_size < original_size:
-                return output_path
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error compressing video with OpenCV: {e}")
-        return None
 
 # ==========================
 # RESULTS DISPLAY
@@ -1156,62 +1091,73 @@ def display_results(results, output_video_path):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🚗 Total Vehicles", results['total_vehicles'])
+        st.metric("🚗 Total Vehicles", results.get('total_vehicles', 0))
     
     with col2:
-        st.metric("📏 Avg Speed", f"{results['avg_speed']:.1f} km/h")
+        st.metric("📏 Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
     
     with col3:
-        st.metric("📈 Max Speed", f"{results['max_speed']:.1f} km/h")
+        st.metric("📈 Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
     
     with col4:
-        st.metric("⏱️ Processing Time", f"{results['processing_time']:.1f}s")
+        st.metric("⏱️ Processing Time", f"{results.get('processing_time', 0):.1f}s")
     
     # Display processed video
     if output_video_path and os.path.exists(output_video_path):
-        st.subheader("📹 Processed Video")
-        
         file_size = os.path.getsize(output_video_path) / (1024 * 1024)
         
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            if file_size > 50:
-                st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). Using streaming player...")
-                
-                # Use HTML5 video with streaming
-                video_base64 = get_video_base64(output_video_path)
-                
-                video_html = f"""
-                <video width="100%" controls autoplay muted style="max-height: 500px; background: #000;">
-                    <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
-                    Your browser does not support the video tag.
-                </video>
-                <p style="color: #666; font-size: 12px; margin-top: 5px;">
-                    Size: {file_size:.1f} MB
-                </p>
-                """
-                st.markdown(video_html, unsafe_allow_html=True)
-            else:
-                with open(output_video_path, 'rb') as f:
-                    video_bytes = f.read()
-                st.video(video_bytes)
-        
-        with col2:
-            st.write("**📥 Download Options**")
+        if file_size > 0:
+            st.subheader("📹 Processed Video")
             
-            with open(output_video_path, 'rb') as f:
-                video_data = f.read()
-                st.download_button(
-                    label=f"📥 Download Video ({file_size:.1f} MB)",
-                    data=video_data,
-                    file_name=os.path.basename(output_video_path),
-                    mime="video/mp4",
-                    use_container_width=True
-                )
+            # Try different display methods
+            try:
+                # First try with HTML5 video for large files
+                if file_size > 50:
+                    video_base64 = get_video_base64(output_video_path)
+                    video_html = f"""
+                    <video width="100%" controls autoplay muted style="max-height: 500px; background: #000; border-radius: 8px;">
+                        <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                    <p style="color: #666; font-size: 12px; margin-top: 5px;">
+                        Size: {file_size:.1f} MB
+                    </p>
+                    """
+                    st.markdown(video_html, unsafe_allow_html=True)
+                else:
+                    # Use Streamlit's built-in video player
+                    with open(output_video_path, 'rb') as f:
+                        video_bytes = f.read()
+                    if video_bytes:
+                        st.video(video_bytes)
+                    else:
+                        st.error("Video file is empty")
+            except Exception as e:
+                st.error(f"Error displaying video: {e}")
+                st.info("Try downloading the video instead.")
+            
+            # Download button
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                with open(output_video_path, 'rb') as f:
+                    video_data = f.read()
+                    st.download_button(
+                        label=f"📥 Download Video ({file_size:.1f} MB)",
+                        data=video_data,
+                        file_name=os.path.basename(output_video_path),
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
+        else:
+            st.error("⚠️ Video file is empty or corrupted")
+    else:
+        st.warning("⚠️ No processed video found")
+        if output_video_path:
+            st.info(f"Checked path: {output_video_path}")
+            st.info(f"File exists: {os.path.exists(output_video_path)}")
     
     # Display graphs
-    if results['frames']:
+    if results.get('frames') and len(results['frames']) > 0:
         st.subheader("📊 Analytics")
         
         df = pd.DataFrame({
@@ -1288,16 +1234,19 @@ def display_results(results, output_video_path):
             ))
             
             if len(speed_df) > 5:
-                z = np.polyfit(speed_df['Speed'], speed_df['Density'], 1)
-                p = np.poly1d(z)
-                x_trend = np.linspace(speed_df['Speed'].min(), speed_df['Speed'].max(), 100)
-                fig3.add_trace(go.Scatter(
-                    x=x_trend,
-                    y=p(x_trend),
-                    mode='lines',
-                    name='Trend Line',
-                    line=dict(color='red', width=2, dash='dash')
-                ))
+                try:
+                    z = np.polyfit(speed_df['Speed'], speed_df['Density'], 1)
+                    p = np.poly1d(z)
+                    x_trend = np.linspace(speed_df['Speed'].min(), speed_df['Speed'].max(), 100)
+                    fig3.add_trace(go.Scatter(
+                        x=x_trend,
+                        y=p(x_trend),
+                        mode='lines',
+                        name='Trend Line',
+                        line=dict(color='red', width=2, dash='dash')
+                    ))
+                except:
+                    pass
             
             fig3.update_layout(
                 title='Speed vs Traffic Density',
@@ -1382,6 +1331,7 @@ def main():
                 st.success("✅ Model found!")
             else:
                 model_path = None
+                st.error("❌ Model not found at specified path")
         
         st.markdown("---")
         
@@ -1562,6 +1512,8 @@ def main():
                 # Set processing flag
                 st.session_state.is_processing = True
                 st.session_state.processing_complete = False
+                st.session_state.processing_error = None
+                st.session_state.results_ready = False
                 
                 # Load model
                 with st.spinner(f"Loading {model_type} model from {selected_model}..."):
@@ -1591,26 +1543,40 @@ def main():
                             target_fps=output_fps
                         )
                         
-                        st.session_state.current_results = results
-                        st.session_state.processed_video_path = output_path
-                        st.session_state.processing = False
-                        st.session_state.video_processed = True
-                        st.session_state.processing_complete = True
-                        
-                        status_placeholder.text("✅ Processing complete!")
-                        progress_bar.progress(1.0)
-                        
-                        st.success("✅ Video processing completed successfully!")
-                        st.balloons()
-                        
-                        st.info("📊 View results in the 'Results' tab")
+                        # Verify output
+                        if output_path and os.path.exists(output_path):
+                            file_size = os.path.getsize(output_path) / (1024 * 1024)
+                            if file_size > 0:
+                                st.session_state.current_results = results
+                                st.session_state.processed_video_path = output_path
+                                st.session_state.video_processed = True
+                                st.session_state.processing_complete = True
+                                st.session_state.results_ready = True
+                                
+                                status_placeholder.text("✅ Processing complete!")
+                                progress_bar.progress(1.0)
+                                
+                                st.success(f"✅ Video processing completed successfully! ({file_size:.2f} MB)")
+                                st.balloons()
+                                
+                                st.info("📊 View results in the 'Results' tab")
+                            else:
+                                st.error("❌ Output video file is empty")
+                                st.session_state.processing_error = "Output video file is empty"
+                        else:
+                            st.error("❌ Output video file was not created")
+                            st.session_state.processing_error = "Output video file was not created"
                         
                     except MemoryError:
                         st.error("❌ Memory error! Try reducing frame skip or using a shorter video.")
+                        st.session_state.processing_error = "Memory error"
                         status_placeholder.text("❌ Processing failed - Out of memory")
                     except Exception as e:
-                        st.error(f"❌ Error processing video: {e}")
+                        st.error(f"❌ Error processing video: {str(e)}")
+                        st.session_state.processing_error = str(e)
                         status_placeholder.text("❌ Processing failed")
+                        import traceback
+                        st.code(traceback.format_exc())
                     finally:
                         st.session_state.is_processing = False
                         del detector
@@ -1622,23 +1588,26 @@ def main():
                 results = st.session_state.current_results
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Vehicles", results['total_vehicles'])
+                    st.metric("Total Vehicles", results.get('total_vehicles', 0))
                 with col2:
-                    st.metric("Avg Speed", f"{results['avg_speed']:.1f} km/h")
+                    st.metric("Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
                 with col3:
-                    st.metric("Max Speed", f"{results['max_speed']:.1f} km/h")
+                    st.metric("Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
                 with col4:
-                    st.metric("Frames Processed", results['frames_processed'])
+                    st.metric("Frames Processed", results.get('frames_processed', 0))
     
     # ==========================
     # TAB 2: Results
     # ==========================
     with tab2:
-        if st.session_state.current_results is not None and st.session_state.video_processed:
+        if st.session_state.results_ready and st.session_state.current_results is not None:
             display_results(
                 st.session_state.current_results,
                 st.session_state.processed_video_path
             )
+        elif st.session_state.processing_error:
+            st.error(f"❌ Processing failed: {st.session_state.processing_error}")
+            st.info("Please try again with different parameters.")
         else:
             st.info("📊 No results to display. Process a video first.")
     
@@ -1648,13 +1617,13 @@ def main():
     with tab3:
         st.subheader("📈 Detailed Analytics")
         
-        if st.session_state.current_results is not None and st.session_state.video_processed:
+        if st.session_state.results_ready and st.session_state.current_results is not None:
             results = st.session_state.current_results
             
             col1, col2 = st.columns(2)
             
             with col1:
-                if results['speeds']:
+                if results.get('speeds'):
                     speeds_filtered = [s for s in results['speeds'] if s > 0]
                     if speeds_filtered:
                         fig_speed = go.Figure()
@@ -1675,7 +1644,7 @@ def main():
                         st.plotly_chart(fig_speed, use_container_width=True)
             
             with col2:
-                if results['density']:
+                if results.get('density'):
                     fig_density = go.Figure()
                     fig_density.add_trace(go.Scatter(
                         y=results['density'],
@@ -1708,14 +1677,14 @@ def main():
                     'Processing Time'
                 ],
                 'Value': [
-                    results['total_vehicles'],
-                    f"{results['avg_speed']:.2f} km/h",
-                    f"{results['max_speed']:.2f} km/h",
-                    f"{results['min_speed']:.2f} km/h",
-                    f"{np.mean(results['density']):.2f}%" if results['density'] else "0.00%",
-                    f"{np.max(results['density']):.2f}%" if results['density'] else "0.00%",
-                    results['frames_processed'],
-                    f"{results['processing_time']:.2f}s"
+                    results.get('total_vehicles', 0),
+                    f"{results.get('avg_speed', 0):.2f} km/h",
+                    f"{results.get('max_speed', 0):.2f} km/h",
+                    f"{results.get('min_speed', 0):.2f} km/h",
+                    f"{np.mean(results.get('density', [0])):.2f}%" if results.get('density') else "0.00%",
+                    f"{np.max(results.get('density', [0])):.2f}%" if results.get('density') else "0.00%",
+                    results.get('frames_processed', 0),
+                    f"{results.get('processing_time', 0):.2f}s"
                 ]
             }
             
@@ -1728,41 +1697,46 @@ def main():
             col1, col2 = st.columns(2)
             
             with col1:
-                df = pd.DataFrame({
-                    'Frame': results['frames'],
-                    'Detections': results['detections'],
-                    'Speed': results['speeds'],
-                    'Density': results['density']
-                })
-                
-                csv = df.to_csv(index=False)
-                st.download_button(
-                    label="📊 Download CSV Report",
-                    data=csv,
-                    file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
+                if results.get('frames'):
+                    df = pd.DataFrame({
+                        'Frame': results['frames'],
+                        'Detections': results['detections'],
+                        'Speed': results['speeds'],
+                        'Density': results['density']
+                    })
+                    
+                    csv = df.to_csv(index=False)
+                    st.download_button(
+                        label="📊 Download CSV Report",
+                        data=csv,
+                        file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
             
             with col2:
-                import json
-                results_serializable = {}
-                for key, value in results.items():
-                    if isinstance(value, np.ndarray):
-                        results_serializable[key] = value.tolist()
-                    elif isinstance(value, np.float32):
-                        results_serializable[key] = float(value)
-                    else:
-                        results_serializable[key] = value
-                
-                json_data = json.dumps(results_serializable, indent=2)
-                st.download_button(
-                    label="📊 Download JSON Report",
-                    data=json_data,
-                    file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json",
-                    use_container_width=True
-                )
+                try:
+                    results_serializable = {}
+                    for key, value in results.items():
+                        if isinstance(value, np.ndarray):
+                            results_serializable[key] = value.tolist()
+                        elif isinstance(value, np.float32):
+                            results_serializable[key] = float(value)
+                        elif isinstance(value, np.int64):
+                            results_serializable[key] = int(value)
+                        else:
+                            results_serializable[key] = value
+                    
+                    json_data = json.dumps(results_serializable, indent=2)
+                    st.download_button(
+                        label="📊 Download JSON Report",
+                        data=json_data,
+                        file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.warning(f"Could not generate JSON: {e}")
         else:
             st.info("📊 No analytics data available. Process a video first.")
 
