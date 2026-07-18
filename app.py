@@ -20,119 +20,22 @@ import yaml
 import shutil
 import glob
 import sys
-import gc
-import warnings
-import base64
-import subprocess
-from collections import deque
-import json
-import random
-
-# Suppress warnings
-warnings.filterwarnings('ignore')
-
-# Set page config - MUST be first Streamlit command
-st.set_page_config(
-    page_title="Traffic AI Detection System",
-    page_icon="🚗",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+import gc  # Add garbage collection
 
 # Add current directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
-# Add custom CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        color: #1f77b4;
-        text-align: center;
-        padding: 1rem 0;
-    }
-    .stButton > button {
-        width: 100%;
-        background-color: #4CAF50;
-        color: white;
-        font-weight: bold;
-        padding: 0.5rem 1rem;
-        border-radius: 8px;
-        border: none;
-        transition: all 0.3s;
-    }
-    .stButton > button:hover {
-        background-color: #45a049;
-        transform: scale(1.02);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-    }
-    .stButton > button:disabled {
-        background-color: #cccccc;
-        cursor: not-allowed;
-    }
-    .css-1d391kg {
-        padding: 1rem;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    .upload-container {
-        border: 2px dashed #4CAF50;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        background-color: #f8f9fa;
-    }
-    .video-container {
-        background-color: #000;
-        border-radius: 10px;
-        overflow: hidden;
-        padding: 0;
-    }
-    .stVideo {
-        max-height: 500px;
-    }
-    .info-box {
-        padding: 1rem;
-        background-color: #e3f2fd;
-        border-left: 4px solid #2196F3;
-        border-radius: 4px;
-        margin: 0.5rem 0;
-    }
-    .warning-box {
-        padding: 1rem;
-        background-color: #fff3e0;
-        border-left: 4px solid #ff9800;
-        border-radius: 4px;
-        margin: 0.5rem 0;
-    }
-    .success-box {
-        padding: 1rem;
-        background-color: #e8f5e9;
-        border-left: 4px solid #4CAF50;
-        border-radius: 4px;
-        margin: 0.5rem 0;
-    }
-    .error-box {
-        padding: 1rem;
-        background-color: #ffebee;
-        border-left: 4px solid #f44336;
-        border-radius: 4px;
-        margin: 0.5rem 0;
-    }
-    .stAlert {
-        padding: 1rem;
-        border-radius: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Set page config - MUST be first Streamlit command
+st.set_page_config(
+    page_title="Traffic AI Detection System",
+    page_icon="🚗",
+    layout="wide"
+)
 
 # Import backend modules with error handling
 try:
+    # Try importing from backend directory (same level as app.py)
     from backend.detection.yolo_detector import YOLODetector
     from backend.detection.cnn_detector import CNNDetector
     from backend.speed_estimator import SpeedEstimator
@@ -143,10 +46,12 @@ except ImportError as e:
     # Create dummy classes for demonstration
     class DummyDetector:
         def detect(self, frame):
+            # Simulate detections
             h, w = frame.shape[:2]
             return [{'bbox': [100, 100, 200, 300], 'confidence': 0.95, 'class': 0} for _ in range(5)]
         
         def detect_frame(self, frame):
+            # Alias for detect method
             return self.detect(frame)
     
     YOLODetector = DummyDetector
@@ -158,390 +63,44 @@ except ImportError as e:
         return {
             'nc': 5,
             'names': {
-                0: 'car', 1: 'truck', 2: 'bus', 
-                3: 'motorcycle', 4: 'bicycle'
+                0: 'car',
+                1: 'truck',
+                2: 'bus',
+                3: 'motorcycle',
+                4: 'bicycle'
             },
             'colors': {
-                0: [0, 0, 255], 1: [0, 255, 0], 2: [255, 0, 0],
-                3: [0, 255, 255], 4: [255, 0, 255]
+                0: [0, 0, 255],
+                1: [0, 255, 0],
+                2: [255, 0, 0],
+                3: [0, 255, 255],
+                4: [255, 0, 255]
             }
         }
     
     def get_class_colors():
         return load_dataset_config().get('colors', {})
 
-# ==========================
-# UTILITY FUNCTIONS
-# ==========================
-
 def initialize_session_state():
     """Initialize session state variables"""
-    defaults = {
-        'processing': False,
-        'detections_history': [],
-        'speed_history': [],
-        'density_history': [],
-        'processed_video_path': None,
-        'detector': None,
-        'current_results': None,
-        'is_processing': False,
-        'video_processed': False,
-        'uploaded_video_path': None,
-        'model_loaded': False,
-        'processing_complete': False,
-        'processing_error': None,
-        'output_video_path': None,
-        'results_ready': False
-    }
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
-
-def handle_file_upload(uploaded_file):
-    """
-    Handle file upload with chunked reading to prevent memory issues
-    
-    Args:
-        uploaded_file: Uploaded file object
-    
-    Returns:
-        Path to saved file or None if failed
-    """
-    if uploaded_file is None:
-        return None
-    
-    try:
-        # Get file size
-        uploaded_file.seek(0, 2)
-        file_size = uploaded_file.tell()
-        uploaded_file.seek(0)
-        
-        file_size_mb = file_size / (1024 * 1024)
-        
-        # Check file size limit (200MB)
-        if file_size_mb > 200:
-            st.error(f"❌ File too large: {file_size_mb:.1f}MB. Maximum is 200MB.")
-            return None
-        
-        # Create temp file with proper extension
-        file_extension = os.path.splitext(uploaded_file.name)[1]
-        if not file_extension:
-            file_extension = '.mp4'
-        
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
-        temp_path = temp_file.name
-        
-        # Show progress for large files
-        progress_bar = None
-        status_text = None
-        
-        if file_size_mb > 20:
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            status_text.text(f"📤 Uploading {file_size_mb:.1f} MB file...")
-        
-        # Read and write in chunks
-        chunk_size = 5 * 1024 * 1024  # 5MB chunks
-        total_read = 0
-        
-        while True:
-            chunk = uploaded_file.read(chunk_size)
-            if not chunk:
-                break
-            
-            temp_file.write(chunk)
-            total_read += len(chunk)
-            
-            # Update progress for large files
-            if progress_bar is not None and file_size > 0:
-                progress = min(total_read / file_size, 1.0)
-                progress_bar.progress(progress)
-                if status_text:
-                    status_text.text(f"📤 Uploading: {total_read/(1024*1024):.1f}/{file_size_mb:.1f} MB")
-        
-        temp_file.close()
-        
-        # Clear progress indicators
-        if progress_bar is not None:
-            progress_bar.empty()
-        if status_text is not None:
-            status_text.empty()
-        
-        return temp_path
-        
-    except Exception as e:
-        st.error(f"❌ Upload failed: {str(e)}")
-        return None
-
-def get_video_base64(video_path):
-    """
-    Convert video file to base64 for HTML5 video player
-    
-    Args:
-        video_path: Path to video file
-    
-    Returns:
-        Base64 encoded video string
-    """
-    try:
-        # Read video in chunks to avoid memory issues
-        chunk_size = 1024 * 1024  # 1MB chunks
-        encoded_parts = []
-        
-        with open(video_path, 'rb') as video_file:
-            while True:
-                chunk = video_file.read(chunk_size)
-                if not chunk:
-                    break
-                encoded_parts.append(base64.b64encode(chunk).decode('utf-8'))
-        
-        return ''.join(encoded_parts)
-    except Exception as e:
-        print(f"Error encoding video: {e}")
-        return ""
-
-def compress_video_ffmpeg(input_path, output_path=None, quality=28):
-    """
-    Compress video using ffmpeg
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for compressed video (optional)
-        quality: CRF value (higher = smaller file)
-    
-    Returns:
-        Path to compressed video or None if failed
-    """
-    if output_path is None:
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_dir = os.path.dirname(input_path)
-        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
-    
-    try:
-        # Check if ffmpeg is available
-        try:
-            subprocess.run(['ffmpeg', '-version'], 
-                         capture_output=True, check=True)
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            return None
-        
-        # Check if input file exists
-        if not os.path.exists(input_path):
-            return None
-        
-        # Compress video with more robust settings
-        cmd = [
-            'ffmpeg',
-            '-i', input_path,
-            '-c:v', 'libx264',
-            '-crf', str(quality),
-            '-preset', 'medium',
-            '-c:a', 'aac',
-            '-b:a', '64k',
-            '-movflags', '+faststart',
-            '-y',
-            output_path
-        ]
-        
-        # Run ffmpeg
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            print(f"FFmpeg error: {result.stderr}")
-            return None
-        
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error compressing video with ffmpeg: {e}")
-        return None
-
-def compress_video_opencv(input_path, output_path=None, target_size_mb=20):
-    """
-    Compress video using OpenCV
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for compressed video (optional)
-        target_size_mb: Target file size in MB
-    
-    Returns:
-        Path to compressed video or None if failed
-    """
-    if output_path is None:
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_dir = os.path.dirname(input_path)
-        output_path = os.path.join(output_dir, f"compressed_{base_name}.mp4")
-    
-    try:
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            return None
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        if width <= 0 or height <= 0:
-            cap.release()
-            return None
-        
-        # Reduce resolution for smaller file
-        target_width = 640
-        if width > target_width:
-            scale = target_width / width
-            new_width = target_width
-            new_height = int(height * scale)
-        else:
-            new_width = width
-            new_height = height
-        
-        # Try different codecs
-        codecs = [
-            ('mp4v', 'mp4v'),
-            ('X264', 'X264'),
-            ('avc1', 'avc1'),
-        ]
-        
-        out = None
-        for codec_name, codec_fourcc in codecs:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
-                out = cv2.VideoWriter(output_path, fourcc, fps, (new_width, new_height))
-                if out.isOpened():
-                    break
-                else:
-                    out.release()
-                    out = None
-            except:
-                continue
-        
-        if out is None:
-            return None
-        
-        # Process frames
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Resize if needed
-            if new_width != width:
-                frame = cv2.resize(frame, (new_width, new_height))
-            
-            # Reduce quality
-            encode_param = [cv2.IMWRITE_JPEG_QUALITY, 70]
-            _, frame_compressed = cv2.imencode('.jpg', frame, encode_param)
-            frame = cv2.imdecode(frame_compressed, cv2.IMREAD_COLOR)
-            
-            out.write(frame)
-            frame_count += 1
-            
-            if frame_count % 100 == 0 and total_frames > 0:
-                print(f"Compressing: {frame_count}/{total_frames} frames")
-        
-        cap.release()
-        out.release()
-        
-        if os.path.exists(output_path):
-            compressed_size = os.path.getsize(output_path) / (1024 * 1024)
-            original_size = os.path.getsize(input_path) / (1024 * 1024)
-            
-            if compressed_size < original_size:
-                return output_path
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error compressing video with OpenCV: {e}")
-        return None
-
-def convert_to_mp4_opencv(input_path, output_path):
-    """
-    Convert video to MP4 format using OpenCV
-    
-    Args:
-        input_path: Path to input video
-        output_path: Path for output video
-    
-    Returns:
-        Path to converted video or None if failed
-    """
-    try:
-        cap = cv2.VideoCapture(input_path)
-        if not cap.isOpened():
-            print("❌ Could not open input video for conversion")
-            return None
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        if width <= 0 or height <= 0:
-            print(f"❌ Invalid dimensions: {width}x{height}")
-            cap.release()
-            return None
-        
-        # Try different MP4 codecs
-        codecs = [
-            ('mp4v', 'mp4v'),
-            ('X264', 'X264'),
-            ('avc1', 'avc1'),
-        ]
-        
-        out = None
-        for codec_name, codec_fourcc in codecs:
-            try:
-                fourcc = cv2.VideoWriter_fourcc(*codec_fourcc)
-                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
-                if out.isOpened():
-                    print(f"✅ Converting with codec: {codec_name}")
-                    break
-                else:
-                    out.release()
-                    out = None
-            except:
-                continue
-        
-        if out is None:
-            print("❌ Could not create video writer for conversion")
-            cap.release()
-            return None
-        
-        # Copy frames
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            out.write(frame)
-            frame_count += 1
-            
-            if frame_count % 100 == 0 and total_frames > 0:
-                print(f"🔄 Converting: {frame_count}/{total_frames} frames")
-        
-        cap.release()
-        out.release()
-        
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return output_path
-        
-        return None
-        
-    except Exception as e:
-        print(f"Error converting video: {e}")
-        return None
-
-# ==========================
-# MODEL MANAGEMENT
-# ==========================
+    if 'processing' not in st.session_state:
+        st.session_state.processing = False
+    if 'detections_history' not in st.session_state:
+        st.session_state.detections_history = []
+    if 'speed_history' not in st.session_state:
+        st.session_state.speed_history = []
+    if 'density_history' not in st.session_state:
+        st.session_state.density_history = []
+    if 'processed_video_path' not in st.session_state:
+        st.session_state.processed_video_path = None
+    if 'detector' not in st.session_state:
+        st.session_state.detector = None
+    if 'current_results' not in st.session_state:
+        st.session_state.current_results = None
+    if 'is_processing' not in st.session_state:
+        st.session_state.is_processing = False
+    if 'video_processed' not in st.session_state:
+        st.session_state.video_processed = False
 
 def get_available_models():
     """
@@ -552,10 +111,7 @@ def get_available_models():
     """
     models = {}
     
-    # Get the current directory
-    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Check multiple possible locations
+    # Check multiple possible locations for models
     possible_paths = [
         Path("model/yolo/runs"),
         Path("model/runs"),
@@ -563,78 +119,72 @@ def get_available_models():
         Path("yolo/runs"),
         Path("cnn/runs"),
         Path("model/cnn/runs"),
-        current_dir / "model" / "yolo" / "runs",
-        current_dir / "model" / "runs",
-        current_dir / "yolo" / "runs",
-        current_dir / "runs",
     ]
     
-    # Add specific Windows path
-    windows_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs")
-    if windows_path.exists():
-        possible_paths.append(windows_path)
+    # Also check specific paths based on your structure
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    possible_paths.extend([
+        current_dir / "models" / "yolo" / "runs",
+        current_dir / "models" / "cnn" / "runs",
+        current_dir / "yolo" / "runs",
+        current_dir / "cnn" / "runs",
+        current_dir / "runs",
+    ])
     
     for runs_path in possible_paths:
         if runs_path.exists():
-            # Look for version directories (v1, v2, etc.)
-            version_dirs = [d for d in runs_path.iterdir() if d.is_dir() and d.name.startswith('v')]
+            print(f"Checking runs directory: {runs_path}")
+            # Look for train directories
+            train_dirs = glob.glob(str(runs_path / "train*"))
+            train_dirs.extend(glob.glob(str(runs_path / "train")))
             
-            for version_dir in version_dirs:
-                # Check for train directories inside version
-                for sub_dir in version_dir.iterdir():
-                    if sub_dir.is_dir() and (sub_dir.name.startswith('train') or sub_dir.name == 'train'):
-                        weights_dir = sub_dir / "weights"
-                        if weights_dir.exists():
-                            # Look for best.pt
-                            best_pt = weights_dir / "best.pt"
-                            if best_pt.exists():
-                                version_name = f"{version_dir.name}/{sub_dir.name}"
-                                models[version_name] = str(best_pt)
-                            
-                            # Look for other .pt files
-                            for pt_file in weights_dir.glob("*.pt"):
-                                if pt_file.name != "best.pt":
-                                    version_name = f"{version_dir.name}/{sub_dir.name}/{pt_file.stem}"
-                                    models[version_name] = str(pt_file)
-            
-            # Look for train directories directly
-            for train_dir in runs_path.iterdir():
-                if train_dir.is_dir() and (train_dir.name.startswith('train') or train_dir.name == 'train'):
-                    weights_dir = train_dir / "weights"
+            for train_dir in train_dirs:
+                train_path = Path(train_dir)
+                if train_path.is_dir():
+                    # Check for weights directory
+                    weights_dir = train_path / "weights"
                     if weights_dir.exists():
+                        # Look for best.pt
                         best_pt = weights_dir / "best.pt"
                         if best_pt.exists():
-                            models[train_dir.name] = str(best_pt)
+                            version_name = train_path.name
+                            models[version_name] = str(best_pt)
+                            print(f"Found model: {version_name} -> {best_pt}")
                         
+                        # Also look for other .pt files
                         for pt_file in weights_dir.glob("*.pt"):
                             if pt_file.name != "best.pt":
-                                version_name = f"{train_dir.name}/{pt_file.stem}"
+                                version_name = f"{train_path.name}/{pt_file.stem}"
                                 models[version_name] = str(pt_file)
+                                print(f"Found model: {version_name} -> {pt_file}")
     
-    # If no models found, search for .pt files
+    # If no models found, try to find any .pt file in the directory
     if not models:
+        print("No models found in runs directories, searching for .pt files...")
         search_paths = [
             current_dir,
-            current_dir / "model",
-            current_dir / "model" / "yolo",
-            Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment"),
+            current_dir / "models",
+            current_dir / "yolo",
+            current_dir / "cnn",
         ]
         
         for search_path in search_paths:
             if search_path.exists():
                 pt_files = list(search_path.glob("**/*.pt"))
                 for pt_file in pt_files:
+                    # Skip if in runs directory (already checked)
                     if "runs" in str(pt_file):
-                        continue
-                    if "venv" in str(pt_file) or "site-packages" in str(pt_file):
                         continue
                     version_name = f"{pt_file.parent.name}/{pt_file.stem}"
                     models[version_name] = str(pt_file)
+                    print(f"Found model: {version_name} -> {pt_file}")
     
-    # Specific check for v1 model
-    specific_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt")
-    if specific_path.exists():
-        models["v1/train/best"] = str(specific_path)
+    # If still no models, try default path
+    if not models:
+        default_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt")
+        if default_path.exists():
+            models["default"] = str(default_path)
+            print(f"Using default model: {default_path}")
     
     return models
 
@@ -645,34 +195,50 @@ def load_dataset_yaml():
     Returns:
         Configuration dictionary
     """
+    # Check multiple possible locations
     yaml_paths = [
         Path("dataset.yaml"),
-        Path("model/yolo/dataset.yaml"),
+        Path("models/yolo/dataset.yaml"),
         Path("config/dataset.yaml"),
         Path("dataset/dataset.yaml"),
         Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset.yaml"),
-        Path(os.path.dirname(os.path.abspath(__file__))) / "dataset.yaml",
     ]
+    
+    # Also check in current directory
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    yaml_paths.extend([
+        current_dir / "dataset.yaml",
+        current_dir / "models" / "yolo" / "dataset.yaml",
+        current_dir / "config" / "dataset.yaml",
+    ])
     
     for yaml_path in yaml_paths:
         if yaml_path.exists():
             try:
                 with open(yaml_path, 'r') as f:
                     config = yaml.safe_load(f)
+                print(f"Loaded dataset config from: {yaml_path}")
                 return config
             except Exception as e:
                 print(f"Error loading {yaml_path}: {e}")
     
     # Return default configuration
+    print("Using default dataset configuration")
     return {
         'nc': 5,
         'names': {
-            0: 'car', 1: 'truck', 2: 'bus', 
-            3: 'motorcycle', 4: 'bicycle'
+            0: 'car',
+            1: 'truck',
+            2: 'bus',
+            3: 'motorcycle',
+            4: 'bicycle'
         },
         'colors': {
-            0: [0, 0, 255], 1: [0, 255, 0], 2: [255, 0, 0],
-            3: [0, 255, 255], 4: [255, 0, 255]
+            0: [0, 0, 255],    # Red (BGR)
+            1: [0, 255, 0],    # Green (BGR)
+            2: [255, 0, 0],    # Blue (BGR)
+            3: [0, 255, 255],  # Yellow (BGR)
+            4: [255, 0, 255]   # Magenta (BGR)
         }
     }
 
@@ -707,10 +273,6 @@ def load_model(model_type, model_path, device='cpu'):
         st.error(f"Error loading model: {e}")
         return None
 
-# ==========================
-# VIDEO PROCESSING
-# ==========================
-
 class VideoProcessorWrapper:
     """Wrapper class for video processing to handle missing modules"""
     def __init__(self, detector, speed_estimator, frame_skip=2):
@@ -720,15 +282,19 @@ class VideoProcessorWrapper:
     
     def process_frame_sync(self, frame):
         """Process a single frame synchronously"""
+        # Use detector to get detections
         try:
             detections = self.detector.detect(frame)
         except AttributeError:
+            # Try detect_frame method
             try:
                 detections = self.detector.detect_frame(frame)
             except AttributeError:
+                # Fallback to dummy detections
                 h, w = frame.shape[:2]
                 detections = [{'bbox': [100, 100, 200, 300], 'confidence': 0.95, 'class': 0} for _ in range(5)]
         
+        # Add speed estimation if available
         for det in detections:
             if self.speed_estimator:
                 try:
@@ -740,32 +306,6 @@ class VideoProcessorWrapper:
                 det['speed'] = 0
         
         return detections
-
-def calculate_density(detections, frame_shape):
-    """
-    Calculate traffic density based on detections
-    
-    Args:
-        detections: List of detection dictionaries
-        frame_shape: Shape of the frame (height, width)
-    
-    Returns:
-        Density percentage
-    """
-    if not detections:
-        return 0.0
-    
-    vehicle_area = 0
-    for det in detections:
-        bbox = det.get('bbox', [0, 0, 100, 100])
-        width = bbox[2] - bbox[0]
-        height = bbox[3] - bbox[1]
-        vehicle_area += width * height
-    
-    total_area = frame_shape[0] * frame_shape[1]
-    density = (vehicle_area / total_area) * 100
-    
-    return min(density, 100.0)
 
 def process_video_with_models(
     video_path,
@@ -784,10 +324,7 @@ def process_video_with_models(
         dataset_config: Dataset configuration dictionary
         frame_skip: Process every Nth frame
         progress_callback: Callback for progress updates
-        target_fps: Target FPS for output video
-    
-    Returns:
-        Tuple of (display_video_path, results_dict)
+        target_fps: Target FPS for output video (default: 60)
     """
     # Initialize components
     try:
@@ -798,90 +335,50 @@ def process_video_with_models(
     except:
         speed_estimator = None
     
+    # Create video processor wrapper
     video_processor = VideoProcessorWrapper(
         detector=detector,
         speed_estimator=speed_estimator,
         frame_skip=frame_skip
     )
     
+    # Get class colors from config
     class_colors = dataset_config.get('colors', {})
     class_names = dataset_config.get('names', {})
     
+    # Open video
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise ValueError("Could not open video")
     
+    # Get video properties
     original_fps = int(cap.get(cv2.CAP_PROP_FPS))
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Validate video properties
-    if width <= 0 or height <= 0:
-        cap.release()
-        raise ValueError(f"Invalid video dimensions: {width}x{height}")
-    
-    print(f"📹 Video info: {width}x{height}, {original_fps} FPS, {total_frames} frames")
-    
+    # Calculate frame interpolation for target FPS
     interpolation_factor = max(1, int(target_fps / original_fps))
     if interpolation_factor > 4:
         interpolation_factor = 4
+        print(f"⚠️ Capping interpolation factor to 4 to prevent memory issues")
     
     actual_output_fps = original_fps * interpolation_factor
     
-    # Create output directory
+    print(f"Original FPS: {original_fps}, Target FPS: {target_fps}, Interpolation: {interpolation_factor}")
+    
+    # Create output video writer
     output_dir = Path("outputs/processed_videos")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_path = output_dir / f"processed_{timestamp}.mp4"
     
-    # Try to create output video with different codecs
-    output_path = None
-    out = None
-    selected_codec = None
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
     
-    # Codec options to try (in order of preference)
-    codec_options = [
-        ('mp4v', '.mp4'),
-        ('X264', '.mp4'),
-        ('avc1', '.mp4'),
-        ('H264', '.mp4'),
-        ('MJPG', '.avi'),
-        ('DIVX', '.avi'),
-        ('XVID', '.avi'),
-    ]
-    
-    for codec_name, extension in codec_options:
-        try:
-            test_path = output_dir / f"processed_{timestamp}{extension}"
-            fourcc = cv2.VideoWriter_fourcc(*codec_name)
-            test_writer = cv2.VideoWriter(str(test_path), fourcc, actual_output_fps, (width, height))
-            
-            if test_writer.isOpened():
-                out = test_writer
-                output_path = test_path
-                selected_codec = codec_name
-                print(f"✅ Using codec: {codec_name} with {extension} container")
-                break
-            else:
-                test_writer.release()
-        except Exception as e:
-            print(f"Codec {codec_name} failed: {e}")
-            continue
-    
-    if out is None or not out.isOpened():
-        # Final fallback - try with default codec
-        try:
-            output_path = output_dir / f"processed_{timestamp}.mp4"
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(str(output_path), fourcc, actual_output_fps, (width, height))
-            if out.isOpened():
-                selected_codec = 'mp4v (fallback)'
-                print(f"✅ Using fallback codec: mp4v")
-            else:
-                raise ValueError("Could not create video writer with any codec")
-        except Exception as e:
-            raise ValueError(f"Could not create video writer: {e}")
+    # Storage for results (limit to prevent memory issues)
+    max_results_frames = 500
     
     results = {
         'frames': [],
@@ -899,7 +396,12 @@ def process_video_with_models(
     frame_count = 0
     processed_count = 0
     start_time = time.time()
-    frames_written = 0
+    prev_frame = None
+    prev_detections = None
+    
+    # For batch processing to improve performance
+    batch_size = 5
+    frame_buffer = []
     
     try:
         while True:
@@ -909,29 +411,33 @@ def process_video_with_models(
             
             frame_count += 1
             
-            # Process frame
+            # Skip frames for performance
             if frame_count % frame_skip != 0:
-                try:
-                    out.write(frame)
-                    frames_written += 1
-                except Exception as e:
-                    print(f"Error writing frame {frame_count}: {e}")
+                out.write(frame)
+                del frame
                 continue
             
+            # Process frame
             try:
+                # Get detections
                 detections = video_processor.process_frame_sync(frame)
+                
+                # Create processed frame with detections
                 processed_frame = frame.copy()
                 
-                # Store results (limit to 500 frames for performance)
-                if len(results['frames']) < 500:
+                # Store results (limit to prevent memory issues)
+                if len(results['frames']) < max_results_frames:
                     results['frames'].append(frame_count)
                     results['detections'].append(len(detections))
                     results['total_vehicles'] += len(detections)
                     
+                    # Calculate speed and density
                     if detections:
                         speeds = [det.get('speed', 0) for det in detections if det.get('speed', 0) > 0]
                         avg_speed = np.mean(speeds) if speeds else 0
                         results['speeds'].append(avg_speed)
+                        
+                        # Calculate density
                         density = calculate_density(detections, frame.shape)
                         results['density'].append(density)
                     else:
@@ -940,7 +446,7 @@ def process_video_with_models(
                 
                 processed_count += 1
                 
-                # Draw detections on frame
+                # Draw detections with class colors
                 for det in detections:
                     bbox = det.get('bbox', [0, 0, 100, 100])
                     class_id = det.get('class', 0)
@@ -948,17 +454,18 @@ def process_video_with_models(
                     speed = det.get('speed', 0)
                     class_name = class_names.get(class_id, f'Class {class_id}')
                     
+                    # Get color for this class from dataset config
                     color = class_colors.get(class_id, [0, 255, 0])
                     if isinstance(color, list):
                         color = tuple(color)
                     
-                    # Draw rectangle
+                    # Draw bounding box
                     cv2.rectangle(processed_frame, 
                                 (bbox[0], bbox[1]), 
                                 (bbox[2], bbox[3]), 
                                 color, 2)
                     
-                    # Create label
+                    # Draw label with class name, confidence, and speed
                     label = f"{class_name} {confidence:.2f}"
                     if speed > 0:
                         label += f" {speed:.1f}km/h"
@@ -978,59 +485,60 @@ def process_video_with_models(
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                               (255, 255, 255), 2)
                 
-                # Add overlay text
+                # Add info overlay
                 overlay_text = f"Detections: {len(detections)} | Frames: {processed_count}"
                 cv2.putText(processed_frame, overlay_text,
                           (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
                           0.7, (0, 255, 255), 2)
                 
-                # Write frame
-                try:
-                    out.write(processed_frame)
-                    frames_written += 1
-                except Exception as e:
-                    print(f"Error writing processed frame {frame_count}: {e}")
+                # Write processed frame
+                out.write(processed_frame)
                 
-                # Clean up
+                # Interpolate frames for smooth video (limited to prevent memory issues)
+                if prev_frame is not None and interpolation_factor > 1 and prev_detections is not None:
+                    num_interpolations = min(interpolation_factor - 1, 2)
+                    for i in range(1, num_interpolations + 1):
+                        alpha = i / (num_interpolations + 1)
+                        interp_frame = cv2.addWeighted(prev_frame, 1 - alpha, processed_frame, alpha, 0)
+                        out.write(interp_frame)
+                
+                # Store previous frame for interpolation
+                prev_frame = processed_frame.copy()
+                prev_detections = detections
+                
+                # Free memory
                 del frame
                 if processed_frame is not None:
                     del processed_frame
                 
-                # Garbage collection every 50 frames
+                # Run garbage collection periodically
                 if processed_count % 50 == 0:
                     gc.collect()
                 
-                # Progress callback
+                # Update progress
                 if progress_callback and total_frames > 0:
-                    progress = min(frame_count / total_frames, 1.0)
+                    progress = frame_count / total_frames
                     progress_callback(progress, frame_count, total_frames)
                 
             except Exception as e:
                 print(f"Error processing frame {frame_count}: {e}")
-                # Write original frame as fallback
-                try:
-                    out.write(frame)
-                    frames_written += 1
-                except:
-                    pass
+                out.write(frame)
                 continue
     
     except MemoryError:
         print("Memory error occurred. Running garbage collection...")
         gc.collect()
         raise
-    except Exception as e:
-        print(f"Unexpected error in processing loop: {e}")
-        raise
     finally:
+        # Clean up resources - REMOVED cv2.destroyAllWindows()
         cap.release()
-        if out is not None:
-            out.release()
+        out.release()
+        # cv2.destroyAllWindows()  # <-- REMOVE THIS LINE
     
+    # Calculate final statistics
     results['processing_time'] = time.time() - start_time
     results['frames_processed'] = processed_count
     
-    # Calculate statistics
     if results['speeds']:
         speeds_filtered = [s for s in results['speeds'] if s > 0]
         if speeds_filtered:
@@ -1038,46 +546,37 @@ def process_video_with_models(
             results['max_speed'] = np.max(speeds_filtered)
             results['min_speed'] = np.min(speeds_filtered)
     
-    print(f"✅ Processing complete!")
+    print(f"✅ Processing complete! Output saved to: {output_path}")
     print(f"📊 Processed {processed_count} frames, {results['total_vehicles']} vehicles detected")
-    print(f"📹 Output file: {output_path}")
-    print(f"📝 Frames written: {frames_written}")
-    print(f"🎥 Codec used: {selected_codec}")
     
-    # Verify output file exists and has content
-    output_path_str = str(output_path)
-    display_path = output_path_str
-    
-    if os.path.exists(output_path_str):
-        file_size = os.path.getsize(output_path_str) / (1024 * 1024)
-        print(f"📦 File size: {file_size:.2f} MB")
-        
-        if file_size < 0.1 and processed_count > 0:
-            print("⚠️ Warning: Output file is very small. Video may not have been written correctly.")
-        
-        # If file is AVI or too large, try to convert to MP4
-        if output_path.suffix == '.avi' or file_size > 50:
-            print("🔄 Converting to MP4 for better compatibility...")
-            mp4_path = str(output_dir / f"compressed_{timestamp}.mp4")
-            
-            # Try ffmpeg first
-            compressed = compress_video_ffmpeg(output_path_str, mp4_path, quality=28)
-            
-            # If ffmpeg fails, try OpenCV
-            if compressed is None:
-                compressed = convert_to_mp4_opencv(output_path_str, mp4_path)
-            
-            if compressed and os.path.exists(compressed) and os.path.getsize(compressed) > 0:
-                display_path = compressed
-                print(f"✅ Converted to MP4: {display_path}")
-    else:
-        print("❌ Output file was not created!")
-    
-    return display_path, results
+    return str(output_path), results
 
-# ==========================
-# RESULTS DISPLAY
-# ==========================
+def calculate_density(detections, frame_shape):
+    """
+    Calculate traffic density based on detections
+    
+    Args:
+        detections: List of detection dictionaries
+        frame_shape: Shape of the frame (height, width)
+    
+    Returns:
+        Density percentage
+    """
+    if not detections:
+        return 0.0
+    
+    # Calculate area occupied by vehicles
+    vehicle_area = 0
+    for det in detections:
+        bbox = det.get('bbox', [0, 0, 100, 100])
+        width = bbox[2] - bbox[0]
+        height = bbox[3] - bbox[1]
+        vehicle_area += width * height
+    
+    total_area = frame_shape[0] * frame_shape[1]
+    density = (vehicle_area / total_area) * 100
+    
+    return min(density, 100.0)
 
 def display_results(results, output_video_path):
     """
@@ -1091,75 +590,44 @@ def display_results(results, output_video_path):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🚗 Total Vehicles", results.get('total_vehicles', 0))
+        st.metric("🚗 Total Vehicles", results['total_vehicles'])
     
     with col2:
-        st.metric("📏 Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
+        st.metric("📏 Avg Speed", f"{results['avg_speed']:.1f} km/h")
     
     with col3:
-        st.metric("📈 Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
+        st.metric("📈 Max Speed", f"{results['max_speed']:.1f} km/h")
     
     with col4:
-        st.metric("⏱️ Processing Time", f"{results.get('processing_time', 0):.1f}s")
+        st.metric("⏱️ Processing Time", f"{results['processing_time']:.1f}s")
     
     # Display processed video
     if output_video_path and os.path.exists(output_video_path):
-        file_size = os.path.getsize(output_video_path) / (1024 * 1024)
+        st.subheader("📹 Processed Video")
         
-        if file_size > 0:
-            st.subheader("📹 Processed Video")
-            
-            # Try different display methods
-            try:
-                # First try with HTML5 video for large files
-                if file_size > 50:
-                    video_base64 = get_video_base64(output_video_path)
-                    video_html = f"""
-                    <video width="100%" controls autoplay muted style="max-height: 500px; background: #000; border-radius: 8px;">
-                        <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
-                        Your browser does not support the video tag.
-                    </video>
-                    <p style="color: #666; font-size: 12px; margin-top: 5px;">
-                        Size: {file_size:.1f} MB
-                    </p>
-                    """
-                    st.markdown(video_html, unsafe_allow_html=True)
-                else:
-                    # Use Streamlit's built-in video player
-                    with open(output_video_path, 'rb') as f:
-                        video_bytes = f.read()
-                    if video_bytes:
-                        st.video(video_bytes)
-                    else:
-                        st.error("Video file is empty")
-            except Exception as e:
-                st.error(f"Error displaying video: {e}")
-                st.info("Try downloading the video instead.")
-            
-            # Download button
-            col1, col2 = st.columns([3, 1])
-            with col2:
-                with open(output_video_path, 'rb') as f:
-                    video_data = f.read()
-                    st.download_button(
-                        label=f"📥 Download Video ({file_size:.1f} MB)",
-                        data=video_data,
-                        file_name=os.path.basename(output_video_path),
-                        mime="video/mp4",
-                        use_container_width=True
-                    )
-        else:
-            st.error("⚠️ Video file is empty or corrupted")
-    else:
-        st.warning("⚠️ No processed video found")
-        if output_video_path:
-            st.info(f"Checked path: {output_video_path}")
-            st.info(f"File exists: {os.path.exists(output_video_path)}")
+        # Check file size and display
+        file_size = os.path.getsize(output_video_path) / (1024 * 1024)  # MB
+        if file_size > 100:  # If file is too large, show warning
+            st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). May take time to load.")
+        
+        with open(output_video_path, 'rb') as f:
+            video_bytes = f.read()
+        st.video(video_bytes)
+        
+        # Download button
+        with open(output_video_path, 'rb') as f:
+            st.download_button(
+                label="📥 Download Processed Video",
+                data=f,
+                file_name=os.path.basename(output_video_path),
+                mime="video/mp4"
+            )
     
-    # Display graphs
-    if results.get('frames') and len(results['frames']) > 0:
+    # Display graphs only if we have data
+    if results['frames']:
         st.subheader("📊 Analytics")
         
+        # Create data for graphs
         df = pd.DataFrame({
             'Frame': results['frames'],
             'Detections': results['detections'],
@@ -1167,6 +635,7 @@ def display_results(results, output_video_path):
             'Density': results['density']
         })
         
+        # Remove zero speeds for better visualization
         speed_df = df[df['Speed'] > 0]
         
         # Graph 1: Detections over time
@@ -1183,9 +652,7 @@ def display_results(results, output_video_path):
             title='Vehicle Count Over Time',
             xaxis_title='Frame Number',
             yaxis_title='Number of Vehicles',
-            height=300,
-            hovermode='x unified',
-            template='plotly_white'
+            height=300
         )
         st.plotly_chart(fig1, use_container_width=True)
         
@@ -1196,16 +663,13 @@ def display_results(results, output_video_path):
                 x=speed_df['Speed'],
                 nbinsx=20,
                 marker_color='green',
-                opacity=0.7,
-                name='Speed Distribution'
+                opacity=0.7
             ))
             fig2.update_layout(
                 title='Speed Distribution',
                 xaxis_title='Speed (km/h)',
                 yaxis_title='Frequency',
-                height=300,
-                bargap=0.1,
-                template='plotly_white'
+                height=300
             )
         else:
             fig2.add_annotation(
@@ -1216,7 +680,7 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig2, use_container_width=True)
         
-        # Graph 3: Speed vs Density
+        # Graph 3: Speed vs Density correlation
         fig3 = go.Figure()
         if not speed_df.empty:
             fig3.add_trace(go.Scatter(
@@ -1229,31 +693,13 @@ def display_results(results, output_video_path):
                     opacity=0.6,
                     showscale=False
                 ),
-                name='Data Points',
-                hovertemplate='Speed: %{x:.1f} km/h<br>Density: %{y:.1f}%<extra></extra>'
+                name='Data Points'
             ))
-            
-            if len(speed_df) > 5:
-                try:
-                    z = np.polyfit(speed_df['Speed'], speed_df['Density'], 1)
-                    p = np.poly1d(z)
-                    x_trend = np.linspace(speed_df['Speed'].min(), speed_df['Speed'].max(), 100)
-                    fig3.add_trace(go.Scatter(
-                        x=x_trend,
-                        y=p(x_trend),
-                        mode='lines',
-                        name='Trend Line',
-                        line=dict(color='red', width=2, dash='dash')
-                    ))
-                except:
-                    pass
-            
             fig3.update_layout(
                 title='Speed vs Traffic Density',
                 xaxis_title='Speed (km/h)',
                 yaxis_title='Density (%)',
-                height=300,
-                template='plotly_white'
+                height=300
             )
         else:
             fig3.add_annotation(
@@ -1264,10 +710,11 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig3, use_container_width=True)
         
-        # Data table
-        with st.expander("📋 View Detailed Data", expanded=False):
-            st.dataframe(df, use_container_width=True, height=300)
+        # Display data table
+        with st.expander("📋 View Detailed Data"):
+            st.dataframe(df, use_container_width=True)
             
+            # Download CSV
             csv = df.to_csv(index=False)
             st.download_button(
                 label="📥 Download CSV Report",
@@ -1278,15 +725,16 @@ def display_results(results, output_video_path):
     else:
         st.info("📊 No analytics data available")
 
-# ==========================
-# MAIN APPLICATION
-# ==========================
-
 def main():
     """Main application"""
     
+    # Initialize session state
     initialize_session_state()
+    
+    # Load dataset configuration
     dataset_config = load_dataset_yaml()
+    
+    # Get available models
     available_models = get_available_models()
     
     # ==========================
@@ -1305,61 +753,34 @@ def main():
             help="Select the detection model type"
         )
         
+        # Model version selection
         if available_models:
             sorted_models = sorted(available_models.keys())
             selected_model = st.selectbox(
                 "Model Version",
                 options=sorted_models,
-                help="Select the trained model version"
+                help="Select the trained model version from your runs folder"
             )
             model_path = available_models[selected_model]
             
             st.info(f"📁 {os.path.basename(model_path)}")
             st.caption(f"Path: {model_path}")
         else:
-            st.warning("⚠️ No trained models found!")
-            st.info("📁 Expected location: `model/yolo/runs/v1/train/weights/best.pt`")
-            
-            # Manual path input
-            manual_path = st.text_input(
-                "Or enter model path manually:",
-                value=r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt"
-            )
-            if manual_path and os.path.exists(manual_path):
-                model_path = manual_path
-                selected_model = "Manual"
-                st.success("✅ Model found!")
-            else:
-                model_path = None
-                st.error("❌ Model not found at specified path")
+            st.warning("⚠️ No trained models found in runs folder!")
+            st.info("📁 Expected location: `models/yolo/runs/train*/weights/best.pt`")
+            model_path = None
+            selected_model = "None"
         
         st.markdown("---")
         
         # Video Source
         st.subheader("🎥 Video Source")
         
-        st.caption("💡 Maximum file size: 200MB")
-        
         uploaded_file = st.file_uploader(
             "Upload Video",
             type=["mp4", "avi", "mov", "mkv", "webm"],
             help="Upload a video file for processing"
         )
-        
-        if uploaded_file is not None:
-            # Save uploaded file
-            if 'uploaded_video_path' not in st.session_state or not st.session_state.uploaded_video_path:
-                with st.spinner("📤 Uploading file..."):
-                    video_path = handle_file_upload(uploaded_file)
-                    if video_path:
-                        st.session_state.uploaded_video_path = video_path
-                        st.success("✅ File uploaded successfully!")
-                        st.rerun()
-        
-        # Check if we have a saved uploaded file
-        if 'uploaded_video_path' in st.session_state and st.session_state.uploaded_video_path:
-            if os.path.exists(st.session_state.uploaded_video_path):
-                st.video(st.session_state.uploaded_video_path)
         
         use_sample = st.checkbox("Use sample video instead")
         
@@ -1374,23 +795,13 @@ def main():
                 options=list(sample_videos.keys())
             )
             sample_path = sample_videos.get(selected_sample)
-            
-            if selected_sample != "None":
-                # Clear uploaded file
-                if 'uploaded_video_path' in st.session_state:
-                    try:
-                        if os.path.exists(st.session_state.uploaded_video_path):
-                            os.unlink(st.session_state.uploaded_video_path)
-                    except:
-                        pass
-                    del st.session_state.uploaded_video_path
         else:
             sample_path = None
         
         st.markdown("---")
         
         # Processing Parameters
-        st.subheader("⚙️ Parameters")
+        st.subheader("⚙️ Processing Parameters")
         
         confidence_threshold = st.slider(
             "Confidence Threshold",
@@ -1401,17 +812,18 @@ def main():
         )
         
         frame_skip = st.number_input(
-            "Frame Skip (1 = all frames)",
+            "Frame Skip (1 = process all frames)",
             min_value=1,
             max_value=10,
             value=2,
             help="Higher values = faster processing"
         )
         
+        # Add FPS selector
         output_fps = st.selectbox(
             "Output FPS",
             options=[30, 60, 120],
-            index=1,
+            index=1,  # Default to 60
             help="Select the output video FPS"
         )
         
@@ -1427,26 +839,27 @@ def main():
         process_button = st.button(
             "▶️ Process Video",
             use_container_width=True,
-            type="primary",
-            disabled=st.session_state.is_processing
+            type="primary"
         )
         
-        st.markdown("---")
-        
         # System Info
+        st.markdown("---")
         st.subheader("🖥️ System Info")
+        
         cuda_available = torch.cuda.is_available()
         device_info = "CUDA" if cuda_available else "CPU"
         st.info(f"Device: {device_info}")
+        
         if cuda_available:
             st.info(f"GPU: {torch.cuda.get_device_name(0)}")
+        
         st.caption(f"📊 Found {len(available_models)} model(s)")
     
     # ==========================
     # MAIN CONTENT
     # ==========================
     
-    st.markdown('<h1 class="main-header">🚗 Traffic AI Detection System</h1>', unsafe_allow_html=True)
+    st.title("🚗 Traffic AI Detection System")
     st.markdown("Upload a traffic video to detect vehicles and estimate their speeds.")
     
     # Create tabs
@@ -1456,6 +869,7 @@ def main():
     # TAB 1: Processing
     # ==========================
     with tab1:
+        # Display video source
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -1463,9 +877,9 @@ def main():
             
             video_preview = st.empty()
             
-            if 'uploaded_video_path' in st.session_state and st.session_state.uploaded_video_path:
-                if os.path.exists(st.session_state.uploaded_video_path):
-                    video_preview.video(st.session_state.uploaded_video_path)
+            # Display uploaded video or sample
+            if uploaded_file is not None:
+                video_preview.video(uploaded_file)
             elif sample_path and os.path.exists(sample_path):
                 video_preview.video(sample_path)
             else:
@@ -1474,11 +888,12 @@ def main():
         with col2:
             st.subheader("📊 Quick Stats")
             
-            st.metric("Selected Model", f"{model_type} - {selected_model if selected_model else 'None'}")
+            # Placeholder stats
+            st.metric("Selected Model", f"{model_type} - {selected_model}")
             st.metric("Confidence", f"{confidence_threshold:.2f}")
             st.metric("Frame Skip", f"{frame_skip}")
             
-            if 'uploaded_video_path' in st.session_state and st.session_state.uploaded_video_path:
+            if uploaded_file is not None:
                 st.success("✅ Video loaded")
             elif sample_path and os.path.exists(sample_path):
                 st.success("✅ Sample loaded")
@@ -1489,10 +904,11 @@ def main():
         if process_button:
             # Determine video source
             video_source = None
-            
-            if 'uploaded_video_path' in st.session_state and st.session_state.uploaded_video_path:
-                if os.path.exists(st.session_state.uploaded_video_path):
-                    video_source = st.session_state.uploaded_video_path
+            if uploaded_file is not None:
+                # Save uploaded file
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp_file:
+                    tmp_file.write(uploaded_file.read())
+                    video_source = tmp_file.name
             elif sample_path and os.path.exists(sample_path):
                 video_source = sample_path
             
@@ -1509,19 +925,12 @@ def main():
                 else:
                     device = 'cuda'
                 
-                # Set processing flag
-                st.session_state.is_processing = True
-                st.session_state.processing_complete = False
-                st.session_state.processing_error = None
-                st.session_state.results_ready = False
-                
                 # Load model
                 with st.spinner(f"Loading {model_type} model from {selected_model}..."):
                     detector = load_model(model_type, model_path, device)
                 
                 if detector is None:
                     st.error("❌ Failed to load model. Please check the model path.")
-                    st.session_state.is_processing = False
                 else:
                     # Process video
                     status_placeholder = st.empty()
@@ -1543,44 +952,38 @@ def main():
                             target_fps=output_fps
                         )
                         
-                        # Verify output
-                        if output_path and os.path.exists(output_path):
-                            file_size = os.path.getsize(output_path) / (1024 * 1024)
-                            if file_size > 0:
-                                st.session_state.current_results = results
-                                st.session_state.processed_video_path = output_path
-                                st.session_state.video_processed = True
-                                st.session_state.processing_complete = True
-                                st.session_state.results_ready = True
-                                
-                                status_placeholder.text("✅ Processing complete!")
-                                progress_bar.progress(1.0)
-                                
-                                st.success(f"✅ Video processing completed successfully! ({file_size:.2f} MB)")
-                                st.balloons()
-                                
-                                st.info("📊 View results in the 'Results' tab")
-                            else:
-                                st.error("❌ Output video file is empty")
-                                st.session_state.processing_error = "Output video file is empty"
-                        else:
-                            st.error("❌ Output video file was not created")
-                            st.session_state.processing_error = "Output video file was not created"
+                        # Store results in session state
+                        st.session_state.current_results = results
+                        st.session_state.processed_video_path = output_path
+                        st.session_state.processing = False
+                        st.session_state.video_processed = True
+                        
+                        status_placeholder.text("✅ Processing complete!")
+                        progress_bar.progress(1.0)
+                        
+                        st.success("✅ Video processing completed successfully!")
+                        st.balloons()
+                        
+                        # Show results in tab 2
+                        st.info("📊 View results in the 'Results' tab")
+                        
+                        # Clean up temp file if uploaded
+                        if uploaded_file is not None and video_source and os.path.exists(video_source):
+                            try:
+                                os.unlink(video_source)
+                            except:
+                                pass
                         
                     except MemoryError:
                         st.error("❌ Memory error! Try reducing frame skip or using a shorter video.")
-                        st.session_state.processing_error = "Memory error"
                         status_placeholder.text("❌ Processing failed - Out of memory")
                     except Exception as e:
-                        st.error(f"❌ Error processing video: {str(e)}")
-                        st.session_state.processing_error = str(e)
+                        st.error(f"❌ Error processing video: {e}")
                         status_placeholder.text("❌ Processing failed")
-                        import traceback
-                        st.code(traceback.format_exc())
-                    finally:
-                        st.session_state.is_processing = False
-                        del detector
-                        gc.collect()
+                    
+                    # Clean up detector to free memory
+                    del detector
+                    gc.collect()
         
         # Show results if available
         if st.session_state.current_results is not None and st.session_state.video_processed:
@@ -1588,26 +991,23 @@ def main():
                 results = st.session_state.current_results
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Total Vehicles", results.get('total_vehicles', 0))
+                    st.metric("Total Vehicles", results['total_vehicles'])
                 with col2:
-                    st.metric("Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
+                    st.metric("Avg Speed", f"{results['avg_speed']:.1f} km/h")
                 with col3:
-                    st.metric("Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
+                    st.metric("Max Speed", f"{results['max_speed']:.1f} km/h")
                 with col4:
-                    st.metric("Frames Processed", results.get('frames_processed', 0))
+                    st.metric("Frames Processed", results['frames_processed'])
     
     # ==========================
     # TAB 2: Results
     # ==========================
     with tab2:
-        if st.session_state.results_ready and st.session_state.current_results is not None:
+        if st.session_state.current_results is not None and st.session_state.video_processed:
             display_results(
                 st.session_state.current_results,
                 st.session_state.processed_video_path
             )
-        elif st.session_state.processing_error:
-            st.error(f"❌ Processing failed: {st.session_state.processing_error}")
-            st.info("Please try again with different parameters.")
         else:
             st.info("📊 No results to display. Process a video first.")
     
@@ -1617,13 +1017,15 @@ def main():
     with tab3:
         st.subheader("📈 Detailed Analytics")
         
-        if st.session_state.results_ready and st.session_state.current_results is not None:
+        if st.session_state.current_results is not None and st.session_state.video_processed:
             results = st.session_state.current_results
             
+            # Create comprehensive dashboard
             col1, col2 = st.columns(2)
             
             with col1:
-                if results.get('speeds'):
+                # Speed over time
+                if results['speeds']:
                     speeds_filtered = [s for s in results['speeds'] if s > 0]
                     if speeds_filtered:
                         fig_speed = go.Figure()
@@ -1631,41 +1033,37 @@ def main():
                             y=speeds_filtered,
                             mode='lines+markers',
                             name='Speed',
-                            line=dict(color='red', width=2),
-                            marker=dict(size=4)
+                            line=dict(color='red', width=2)
                         ))
                         fig_speed.update_layout(
                             title='Speed Over Time',
                             xaxis_title='Frame',
                             yaxis_title='Speed (km/h)',
-                            height=300,
-                            template='plotly_white'
+                            height=300
                         )
                         st.plotly_chart(fig_speed, use_container_width=True)
             
             with col2:
-                if results.get('density'):
+                # Density over time
+                if results['density']:
                     fig_density = go.Figure()
                     fig_density.add_trace(go.Scatter(
                         y=results['density'],
                         mode='lines+markers',
                         name='Density',
-                        line=dict(color='orange', width=2),
-                        marker=dict(size=4)
+                        line=dict(color='orange', width=2)
                     ))
                     fig_density.update_layout(
                         title='Traffic Density Over Time',
                         xaxis_title='Frame',
                         yaxis_title='Density (%)',
-                        height=300,
-                        template='plotly_white'
+                        height=300
                     )
                     st.plotly_chart(fig_density, use_container_width=True)
             
             # Summary statistics
             st.subheader("📊 Summary Statistics")
-            
-            stats_data = {
+            stats_df = pd.DataFrame({
                 'Metric': [
                     'Total Vehicles Detected',
                     'Average Speed',
@@ -1677,66 +1075,48 @@ def main():
                     'Processing Time'
                 ],
                 'Value': [
-                    results.get('total_vehicles', 0),
-                    f"{results.get('avg_speed', 0):.2f} km/h",
-                    f"{results.get('max_speed', 0):.2f} km/h",
-                    f"{results.get('min_speed', 0):.2f} km/h",
-                    f"{np.mean(results.get('density', [0])):.2f}%" if results.get('density') else "0.00%",
-                    f"{np.max(results.get('density', [0])):.2f}%" if results.get('density') else "0.00%",
-                    results.get('frames_processed', 0),
-                    f"{results.get('processing_time', 0):.2f}s"
+                    results['total_vehicles'],
+                    f"{results['avg_speed']:.2f} km/h",
+                    f"{results['max_speed']:.2f} km/h",
+                    f"{results['min_speed']:.2f} km/h",
+                    f"{np.mean(results['density']):.2f}%" if results['density'] else "0.00%",
+                    f"{np.max(results['density']):.2f}%" if results['density'] else "0.00%",
+                    results['frames_processed'],
+                    f"{results['processing_time']:.2f}s"
                 ]
-            }
-            
-            stats_df = pd.DataFrame(stats_data)
-            st.dataframe(stats_df, use_container_width=True, hide_index=True)
+            })
+            st.dataframe(stats_df, use_container_width=True)
             
             # Export options
             st.subheader("📥 Export Data")
-            
             col1, col2 = st.columns(2)
             
             with col1:
-                if results.get('frames'):
+                if st.button("📊 Export as CSV"):
                     df = pd.DataFrame({
                         'Frame': results['frames'],
                         'Detections': results['detections'],
                         'Speed': results['speeds'],
                         'Density': results['density']
                     })
-                    
                     csv = df.to_csv(index=False)
                     st.download_button(
-                        label="📊 Download CSV Report",
+                        label="Download CSV",
                         data=csv,
                         file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                        mime="text/csv",
-                        use_container_width=True
+                        mime="text/csv"
                     )
             
             with col2:
-                try:
-                    results_serializable = {}
-                    for key, value in results.items():
-                        if isinstance(value, np.ndarray):
-                            results_serializable[key] = value.tolist()
-                        elif isinstance(value, np.float32):
-                            results_serializable[key] = float(value)
-                        elif isinstance(value, np.int64):
-                            results_serializable[key] = int(value)
-                        else:
-                            results_serializable[key] = value
-                    
-                    json_data = json.dumps(results_serializable, indent=2)
+                if st.button("📊 Export as JSON"):
+                    import json
+                    json_data = json.dumps(results, default=lambda x: float(x) if isinstance(x, np.float32) else x, indent=2)
                     st.download_button(
-                        label="📊 Download JSON Report",
+                        label="Download JSON",
                         data=json_data,
                         file_name=f"traffic_analytics_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                        mime="application/json",
-                        use_container_width=True
+                        mime="application/json"
                     )
-                except Exception as e:
-                    st.warning(f"Could not generate JSON: {e}")
         else:
             st.info("📊 No analytics data available. Process a video first.")
 
