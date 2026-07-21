@@ -425,7 +425,7 @@ def process_video_with_models(
     print(f"Original FPS: {original_fps}, Target FPS: {target_fps}, Interpolation: {interpolation_factor}")
     
     # Create output video writer
-    output_dir = Path("outputs/processed_videos")
+    output_dir = Path("output/processed_videos")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
