@@ -410,6 +410,10 @@ def process_video_with_models(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
+    # Define frame_skip - process every frame by default
+    # You can add this as a parameter if you want to skip frames
+    frame_skip = 1  # Process every frame
+    
     # Calculate frame interpolation for target FPS
     interpolation_factor = max(1, int(target_fps / original_fps))
     if interpolation_factor > 4:
@@ -462,7 +466,9 @@ def process_video_with_models(
             if not ret:
                 break
             
-            # Process frame
+            frame_count += 1
+            
+            # Process frame (now we process every frame since frame_skip=1)
             try:
                 # Get detections
                 detections = video_processor.process_frame_sync(frame)
@@ -560,9 +566,9 @@ def process_video_with_models(
                 if processed_count % 50 == 0:
                     gc.collect()
                 
-                # Update progress
+                # Update progress - FIXED: Use frame_count and total_frames
                 if progress_callback and total_frames > 0:
-                    progress = frame_count / total_frames
+                    progress = min(frame_count / total_frames, 1.0)  # Cap at 1.0
                     progress_callback(progress, frame_count, total_frames)
                 
             except Exception as e:
@@ -575,10 +581,9 @@ def process_video_with_models(
         gc.collect()
         raise
     finally:
-        # Clean up resources - REMOVED cv2.destroyAllWindows()
+        # Clean up resources
         cap.release()
         out.release()
-        # cv2.destroyAllWindows()  # <-- REMOVE THIS LINE
     
     # Calculate final statistics
     results['processing_time'] = time.time() - start_time
@@ -973,8 +978,8 @@ def main():
                     progress_bar = st.progress(0)
                     
                     def progress_callback(progress, current, total):
-                        progress_bar.progress(progress)
-                        status_placeholder.text(f"Processing: {current}/{total} frames ({progress*100:.1f}%)")
+                        progress_bar.progress(min(progress, 1.0))
+                        status_placeholder.text(f"Processing: {current}/{total} frames ({min(progress * 100, 100):.1f}%)")
                     
                     try:
                         status_placeholder.text("⏳ Processing video...")
