@@ -6,7 +6,6 @@ import cv2
 import os
 import time
 import gc
-import tempfile
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
