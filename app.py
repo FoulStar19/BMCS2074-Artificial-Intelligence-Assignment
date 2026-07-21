@@ -639,61 +639,64 @@ def calculate_density(detections, frame_shape):
 def display_results(results, output_video_path):
     """
     Display detection results in Streamlit
-    
-    Args:
-        results: Results dictionary
-        output_video_path: Path to processed video
     """
     # Display statistics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🚗 Total Vehicles", results['total_vehicles'])
+        st.metric("🚗 Total Vehicles", results.get('total_vehicles', 0))
     
     with col2:
-        st.metric("📏 Avg Speed", f"{results['avg_speed']:.1f} km/h")
+        st.metric("📏 Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
     
     with col3:
-        st.metric("📈 Max Speed", f"{results['max_speed']:.1f} km/h")
+        st.metric("📈 Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
     
     with col4:
-        st.metric("⏱️ Processing Time", f"{results['processing_time']:.1f}s")
+        st.metric("⏱️ Processing Time", f"{results.get('processing_time', 0):.1f}s")
     
     # Display processed video
+    st.subheader("📹 Processed Video")
+    
     if output_video_path and os.path.exists(output_video_path):
-        st.subheader("📹 Processed Video")
-        
-        # Check file size and display
+        # Check file size
         file_size = os.path.getsize(output_video_path) / (1024 * 1024)  # MB
-        if file_size > 100:  # If file is too large, show warning
+        if file_size > 100:
             st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). May take time to load.")
         
-        with open(output_video_path, 'rb') as f:
-            video_bytes = f.read()
-        st.video(video_bytes)
-        
-        # Download button
-        with open(output_video_path, 'rb') as f:
-            st.download_button(
-                label="📥 Download Processed Video",
-                data=f,
-                file_name=os.path.basename(output_video_path),
-                mime="video/mp4"
-            )
+        # Read and display video
+        try:
+            with open(output_video_path, 'rb') as f:
+                video_bytes = f.read()
+            st.video(video_bytes)
+            
+            # Download button
+            with open(output_video_path, 'rb') as f:
+                st.download_button(
+                    label="📥 Download Processed Video",
+                    data=f,
+                    file_name=os.path.basename(output_video_path),
+                    mime="video/mp4"
+                )
+        except Exception as e:
+            st.error(f"Error displaying video: {e}")
+            st.info(f"Video saved at: {output_video_path}")
+    else:
+        st.warning("⚠️ Processed video not found. Please process a video first.")
     
-    # Display graphs only if we have data
-    if results['frames']:
+    # Display analytics if data available
+    if results.get('frames') and len(results['frames']) > 0:
         st.subheader("📊 Analytics")
         
         # Create data for graphs
         df = pd.DataFrame({
             'Frame': results['frames'],
             'Detections': results['detections'],
-            'Speed': results['speeds'],
-            'Density': results['density']
+            'Speed': results.get('speeds', [0] * len(results['frames'])),
+            'Density': results.get('density', [0] * len(results['frames']))
         })
         
-        # Remove zero speeds for better visualization
+        # Filter out zero speeds
         speed_df = df[df['Speed'] > 0]
         
         # Graph 1: Detections over time
@@ -716,7 +719,7 @@ def display_results(results, output_video_path):
         
         # Graph 2: Speed distribution
         fig2 = go.Figure()
-        if not speed_df.empty:
+        if not speed_df.empty and speed_df['Speed'].sum() > 0:
             fig2.add_trace(go.Histogram(
                 x=speed_df['Speed'],
                 nbinsx=20,
@@ -738,9 +741,9 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig2, use_container_width=True)
         
-        # Graph 3: Speed vs Density correlation
+        # Graph 3: Speed vs Density
         fig3 = go.Figure()
-        if not speed_df.empty:
+        if not speed_df.empty and speed_df['Speed'].sum() > 0:
             fig3.add_trace(go.Scatter(
                 x=speed_df['Speed'],
                 y=speed_df['Density'],
@@ -748,8 +751,7 @@ def display_results(results, output_video_path):
                 marker=dict(
                     size=8,
                     color='purple',
-                    opacity=0.6,
-                    showscale=False
+                    opacity=0.6
                 ),
                 name='Data Points'
             ))
@@ -768,7 +770,7 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig3, use_container_width=True)
         
-        # Display data table
+        # Data table
         with st.expander("📋 View Detailed Data"):
             st.dataframe(df, use_container_width=True)
             
