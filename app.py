@@ -10,7 +10,6 @@ import tempfile
 import gc
 from pathlib import Path
 import torch
-import cv2
 
 # Set page config - MUST be first Streamlit command
 st.set_page_config(
