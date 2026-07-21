@@ -369,7 +369,7 @@ def process_video_with_models(
     video_path,
     detector,
     dataset_config,
-    frame_skip=2,
+    frame_skip=1,
     progress_callback=None,
     target_fps=60
 ):
@@ -869,14 +869,6 @@ def main():
             max_value=0.9,
             value=0.5,
             step=0.05
-        )
-        
-        frame_skip = st.number_input(
-            "Frame Skip (1 = process all frames)",
-            min_value=1,
-            max_value=10,
-            value=2,
-            help="Higher values = faster processing"
         )
         
         # Add FPS selector
