@@ -1,5 +1,5 @@
 """
-YOLO-based vehicle detector
+YOLO-based vehicle detector with tracking integration
 """
 
 import torch
@@ -13,13 +13,16 @@ import yaml
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from backend.tracking.tracker import VehicleTracker
+
 
 class YOLODetector:
     """
-    YOLO-based vehicle detection using Ultralytics YOLO
+    YOLO-based vehicle detection using Ultralytics YOLO with tracking
     """
     
-    def __init__(self, model_path=None, device='cpu', conf_threshold=0.5):
+    def __init__(self, model_path=None, device='cpu', conf_threshold=0.25, 
+                 enable_tracking=True, max_lost_frames=15):
         """
         Initialize YOLO detector
         
@@ -27,11 +30,17 @@ class YOLODetector:
             model_path: Path to YOLO model weights (.pt file)
             device: 'cpu' or 'cuda'
             conf_threshold: Confidence threshold for detections
+            enable_tracking: Enable vehicle tracking
+            max_lost_frames: Maximum frames before track is lost
         """
         self.device = device
         self.conf_threshold = conf_threshold
         self.model = None
         self.is_dummy = False
+        self.enable_tracking = enable_tracking
+        
+        # Initialize tracker
+        self.tracker = VehicleTracker(max_lost_frames=max_lost_frames)
         
         # Load dataset configuration
         self.dataset_config = self._load_dataset_config()
@@ -72,6 +81,7 @@ class YOLODetector:
             "config/dataset.yaml",
             Path(__file__).parent.parent / "dataset.yaml",
             Path(__file__).parent.parent / "model" / "yolo" / "dataset.yaml",
+            Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset.yaml"),
         ]
         
         for yaml_path in yaml_paths:
@@ -125,7 +135,10 @@ class YOLODetector:
         try:
             from ultralytics import YOLO
             self.model = YOLO(model_path)
-            print(f"✅ YOLO model loaded from {model_path}")
+            # Move to device if CUDA is available
+            if self.device == 'cuda' and torch.cuda.is_available():
+                self.model.to('cuda')
+            print(f"✅ YOLO model loaded from {model_path} on {self.device}")
             self.is_dummy = False
         except ImportError:
             print("⚠️ Ultralytics not installed. Using dummy mode.")
@@ -134,36 +147,41 @@ class YOLODetector:
             print(f"⚠️ Error loading model: {e}. Using dummy mode.")
             self.is_dummy = True
     
-    def detect(self, frame):
+    def detect(self, frame, enable_tracking=None):
         """
-        Detect vehicles in a frame
+        Detect vehicles in a frame with optional tracking
         
         Args:
             frame: Input image (numpy array)
+            enable_tracking: Override tracking setting
             
         Returns:
-            List of detection dictionaries
+            List of detection dictionaries with track_ids and speeds
         """
         # If dummy mode, return simulated detections
         if self.is_dummy or self.model is None:
             return self._dummy_detect(frame)
         
+        use_tracking = enable_tracking if enable_tracking is not None else self.enable_tracking
+        
         try:
             # Run YOLO inference
-            results = self.model(frame, conf=self.conf_threshold)
+            results = self.model(
+                frame, 
+                conf=self.conf_threshold,
+                verbose=False,
+                stream=False
+            )
             
             detections = []
             
             # Process results
             if results and len(results) > 0:
                 result = results[0]
-                
-                # Get boxes, confidences, and class IDs
                 boxes = result.boxes
                 
                 if boxes is not None and len(boxes) > 0:
                     for box in boxes:
-                        # Get box coordinates
                         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
                         confidence = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy())
@@ -177,15 +195,27 @@ class YOLODetector:
                                 'class_name': self.get_class_name(class_id)
                             })
             
+            # Apply tracking if enabled
+            if use_tracking and detections:
+                detections = self.tracker.update(frame, detections)
+            
             return detections
             
         except Exception as e:
             print(f"Error during detection: {e}")
             return self._dummy_detect(frame)
     
-    def detect_frame(self, frame):
+    def detect_frame(self, frame, enable_tracking=None):
         """Alias for detect method"""
-        return self.detect(frame)
+        return self.detect(frame, enable_tracking)
+    
+    def reset_tracker(self):
+        """Reset the vehicle tracker"""
+        self.tracker.reset()
+    
+    def draw_trails(self, frame, trail_length=20):
+        """Draw tracking trails on frame"""
+        return self.tracker.draw_trails(frame, trail_length)
     
     def _dummy_detect(self, frame):
         """
@@ -204,7 +234,7 @@ class YOLODetector:
         num_detections = random.randint(2, 5)
         detections = []
         
-        for _ in range(num_detections):
+        for i in range(num_detections):
             # Random bounding box
             x = random.randint(50, w - 150)
             y = random.randint(50, h - 150)
@@ -219,7 +249,12 @@ class YOLODetector:
                 'confidence': random.uniform(0.5, 0.95),
                 'class': class_id,
                 'class_name': self.get_class_name(class_id),
-                'speed': random.uniform(20, 80)  # Add dummy speed
+                'track_id': i,
+                'speed': random.uniform(20, 80)
             })
+        
+        # Apply tracking if enabled
+        if self.enable_tracking:
+            detections = self.tracker.update(frame, detections)
         
         return detections
