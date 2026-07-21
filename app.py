@@ -332,11 +332,9 @@ def load_model(model_type, model_path, device='cpu'):
         return None
 
 class VideoProcessorWrapper:
-    """Wrapper class for video processing to handle missing modules"""
-    def __init__(self, detector, speed_estimator, frame_skip=2):
+    def __init__(self, detector, speed_estimator):
         self.detector = detector
         self.speed_estimator = speed_estimator
-        self.frame_skip = frame_skip
     
     def process_frame_sync(self, frame):
         """Process a single frame synchronously"""
@@ -369,7 +367,6 @@ def process_video_with_models(
     video_path,
     detector,
     dataset_config,
-    frame_skip=1,
     progress_callback=None,
     target_fps=60
 ):
@@ -466,14 +463,6 @@ def process_video_with_models(
             ret, frame = cap.read()
             if not ret:
                 break
-            
-            frame_count += 1
-            
-            # Skip frames for performance
-            if frame_count % frame_skip != 0:
-                out.write(frame)
-                del frame
-                continue
             
             # Process frame
             try:
@@ -639,64 +628,61 @@ def calculate_density(detections, frame_shape):
 def display_results(results, output_video_path):
     """
     Display detection results in Streamlit
+    
+    Args:
+        results: Results dictionary
+        output_video_path: Path to processed video
     """
     # Display statistics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🚗 Total Vehicles", results.get('total_vehicles', 0))
+        st.metric("🚗 Total Vehicles", results['total_vehicles'])
     
     with col2:
-        st.metric("📏 Avg Speed", f"{results.get('avg_speed', 0):.1f} km/h")
+        st.metric("📏 Avg Speed", f"{results['avg_speed']:.1f} km/h")
     
     with col3:
-        st.metric("📈 Max Speed", f"{results.get('max_speed', 0):.1f} km/h")
+        st.metric("📈 Max Speed", f"{results['max_speed']:.1f} km/h")
     
     with col4:
-        st.metric("⏱️ Processing Time", f"{results.get('processing_time', 0):.1f}s")
+        st.metric("⏱️ Processing Time", f"{results['processing_time']:.1f}s")
     
     # Display processed video
-    st.subheader("📹 Processed Video")
-    
     if output_video_path and os.path.exists(output_video_path):
-        # Check file size
+        st.subheader("📹 Processed Video")
+        
+        # Check file size and display
         file_size = os.path.getsize(output_video_path) / (1024 * 1024)  # MB
-        if file_size > 100:
+        if file_size > 100:  # If file is too large, show warning
             st.warning(f"⚠️ Video file is large ({file_size:.1f} MB). May take time to load.")
         
-        # Read and display video
-        try:
-            with open(output_video_path, 'rb') as f:
-                video_bytes = f.read()
-            st.video(video_bytes)
-            
-            # Download button
-            with open(output_video_path, 'rb') as f:
-                st.download_button(
-                    label="📥 Download Processed Video",
-                    data=f,
-                    file_name=os.path.basename(output_video_path),
-                    mime="video/mp4"
-                )
-        except Exception as e:
-            st.error(f"Error displaying video: {e}")
-            st.info(f"Video saved at: {output_video_path}")
-    else:
-        st.warning("⚠️ Processed video not found. Please process a video first.")
+        with open(output_video_path, 'rb') as f:
+            video_bytes = f.read()
+        st.video(video_bytes)
+        
+        # Download button
+        with open(output_video_path, 'rb') as f:
+            st.download_button(
+                label="📥 Download Processed Video",
+                data=f,
+                file_name=os.path.basename(output_video_path),
+                mime="video/mp4"
+            )
     
-    # Display analytics if data available
-    if results.get('frames') and len(results['frames']) > 0:
+    # Display graphs only if we have data
+    if results['frames']:
         st.subheader("📊 Analytics")
         
         # Create data for graphs
         df = pd.DataFrame({
             'Frame': results['frames'],
             'Detections': results['detections'],
-            'Speed': results.get('speeds', [0] * len(results['frames'])),
-            'Density': results.get('density', [0] * len(results['frames']))
+            'Speed': results['speeds'],
+            'Density': results['density']
         })
         
-        # Filter out zero speeds
+        # Remove zero speeds for better visualization
         speed_df = df[df['Speed'] > 0]
         
         # Graph 1: Detections over time
@@ -719,7 +705,7 @@ def display_results(results, output_video_path):
         
         # Graph 2: Speed distribution
         fig2 = go.Figure()
-        if not speed_df.empty and speed_df['Speed'].sum() > 0:
+        if not speed_df.empty:
             fig2.add_trace(go.Histogram(
                 x=speed_df['Speed'],
                 nbinsx=20,
@@ -741,9 +727,9 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig2, use_container_width=True)
         
-        # Graph 3: Speed vs Density
+        # Graph 3: Speed vs Density correlation
         fig3 = go.Figure()
-        if not speed_df.empty and speed_df['Speed'].sum() > 0:
+        if not speed_df.empty:
             fig3.add_trace(go.Scatter(
                 x=speed_df['Speed'],
                 y=speed_df['Density'],
@@ -751,7 +737,8 @@ def display_results(results, output_video_path):
                 marker=dict(
                     size=8,
                     color='purple',
-                    opacity=0.6
+                    opacity=0.6,
+                    showscale=False
                 ),
                 name='Data Points'
             ))
@@ -770,7 +757,7 @@ def display_results(results, output_video_path):
             )
         st.plotly_chart(fig3, use_container_width=True)
         
-        # Data table
+        # Display data table
         with st.expander("📋 View Detailed Data"):
             st.dataframe(df, use_container_width=True)
             
@@ -943,7 +930,6 @@ def main():
             # Placeholder stats
             st.metric("Selected Model", f"{model_type} - {selected_model}")
             st.metric("Confidence", f"{confidence_threshold:.2f}")
-            st.metric("Frame Skip", f"{frame_skip}")
             
             if uploaded_file is not None:
                 st.success("✅ Video loaded")
