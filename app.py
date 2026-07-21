@@ -377,7 +377,6 @@ def process_video_with_models(
         video_path: Path to video file
         detector: Detection model instance
         dataset_config: Dataset configuration dictionary
-        frame_skip: Process every Nth frame
         progress_callback: Callback for progress updates
         target_fps: Target FPS for output video (default: 60)
     """
@@ -394,7 +393,6 @@ def process_video_with_models(
     video_processor = VideoProcessorWrapper(
         detector=detector,
         speed_estimator=speed_estimator,
-        frame_skip=frame_skip
     )
     
     # Get class colors from config
@@ -985,7 +983,6 @@ def main():
                             video_path=video_source,
                             detector=detector,
                             dataset_config=dataset_config,
-                            frame_skip=frame_skip,
                             progress_callback=progress_callback,
                             target_fps=output_fps
                         )

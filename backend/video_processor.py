@@ -14,7 +14,7 @@ class VideoProcessor:
     Process video streams with detection and tracking
     """
     
-    def __init__(self, detector, speed_estimator=None):  # REMOVED frame_skip parameter
+    def __init__(self, detector, speed_estimator=None):
         """
         Initialize video processor
         
@@ -24,7 +24,6 @@ class VideoProcessor:
         """
         self.detector = detector
         self.speed_estimator = speed_estimator
-        # REMOVED: self.frame_skip = frame_skip
         
         # Statistics
         self.total_frames = 0
@@ -132,8 +131,11 @@ class VideoProcessor:
                 frame_count += 1
                 self.total_frames += 1
                 
-                # Process ALL frames - REMOVED frame skip condition
-                processed_frame, detections = self.process_frame_sync(frame)
+                if frame_count % self.frame_skip == 0:
+                    processed_frame, detections = self.process_frame_sync(frame)
+                else:
+                    processed_frame = frame
+                    detections = []
                 
                 # Store results
                 results.append({
