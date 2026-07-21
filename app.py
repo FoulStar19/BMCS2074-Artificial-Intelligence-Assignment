@@ -13,16 +13,80 @@ from pathlib import Path
 from datetime import datetime
 import yaml
 
-# Import OpenCV with fallback
+# ============================================
+# CRITICAL FIX: Import OpenCV headless first
+# ============================================
+# Try multiple ways to import OpenCV
+cv2 = None
+
+# Method 1: Try importing opencv-python-headless
 try:
+    # Force headless loading by setting environment variable
+    os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    
+    # Try direct import
     import cv2
-except ImportError:
-    # Try to import headless version if available
+    print("✅ OpenCV loaded successfully")
+except ImportError as e:
+    print(f"⚠️ OpenCV import error: {e}")
+    
+    # Method 2: Try using importlib to load from a specific location
     try:
-        import cv2
-    except ImportError:
-        st.error("OpenCV not available. Please install opencv-python-headless")
-        cv2 = None
+        import importlib
+        import importlib.util
+        
+        # Try to find cv2 in the system
+        spec = importlib.util.find_spec("cv2")
+        if spec:
+            print(f"Found cv2 spec: {spec}")
+            cv2 = importlib.import_module("cv2")
+            print("✅ OpenCV loaded via importlib")
+    except Exception as e2:
+        print(f"⚠️ OpenCV importlib error: {e2}")
+        
+        # Method 3: Try to install it on the fly (for Streamlit Cloud)
+        try:
+            import subprocess
+            print("Attempting to install opencv-python-headless...")
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", 
+                "opencv-python-headless==4.8.1.78", 
+                "--force-reinstall", "--no-deps"
+            ])
+            import cv2
+            print("✅ OpenCV installed and loaded")
+        except Exception as e3:
+            print(f"⚠️ Failed to install OpenCV: {e3}")
+
+# Check if OpenCV loaded successfully
+if cv2 is None:
+    st.error("⚠️ OpenCV failed to load. Please check the logs.")
+    # Create a dummy cv2 to prevent further errors
+    class DummyCV2:
+        class VideoCapture:
+            def __init__(self, *args, **kwargs):
+                self.is_opened = lambda: False
+            def release(self): pass
+        class VideoWriter:
+            def __init__(self, *args, **kwargs): pass
+            def release(self): pass
+            def write(self, *args): pass
+        def VideoWriter_fourcc(*args): return 0
+        def rectangle(*args): pass
+        def putText(*args): pass
+        def getTextSize(*args): return (0, 0), 0
+        def addWeighted(*args): return None
+        def resize(*args): return None
+        def imencode(*args): return (True, b'')
+        CAP_PROP_FPS = 5
+        CAP_PROP_FRAME_WIDTH = 3
+        CAP_PROP_FRAME_HEIGHT = 4
+        CAP_PROP_FRAME_COUNT = 7
+        FONT_HERSHEY_SIMPLEX = 0
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+    cv2 = DummyCV2()
 
 import torch
 import numpy as np
@@ -30,10 +94,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from PIL import Image
-import shutil
-import glob
 
-# Add current directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
