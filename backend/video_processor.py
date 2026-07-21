@@ -14,16 +14,18 @@ class VideoProcessor:
     Process video streams with detection and tracking
     """
     
-    def __init__(self, detector, speed_estimator=None):
+    def __init__(self, detector, speed_estimator=None, frame_skip=2):
         """
         Initialize video processor
         
         Args:
             detector: Detection model instance
             speed_estimator: Speed estimator instance
+            frame_skip: Process every Nth frame
         """
         self.detector = detector
         self.speed_estimator = speed_estimator
+        self.frame_skip = frame_skip
         
         # Statistics
         self.total_frames = 0
@@ -131,6 +133,7 @@ class VideoProcessor:
                 frame_count += 1
                 self.total_frames += 1
                 
+                # Process frame
                 if frame_count % self.frame_skip == 0:
                     processed_frame, detections = self.process_frame_sync(frame)
                 else:

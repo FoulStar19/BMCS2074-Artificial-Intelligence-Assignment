@@ -111,139 +111,81 @@ def get_available_models():
     """
     models = {}
     
-    # Get the current directory
-    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
-    
     # Check multiple possible locations for models
     possible_paths = [
-        Path("model/yolo/runs"),
-        Path("model/runs"),
+        Path("models/yolo/runs"),
+        Path("models/runs"),
         Path("runs"),
         Path("yolo/runs"),
         Path("cnn/runs"),
-        Path("model/cnn/runs"),
-        current_dir / "model" / "yolo" / "runs",
-        current_dir / "model" / "runs",
-        current_dir / "yolo" / "runs",
-        current_dir / "runs",
-        # Add your specific path
-        Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs"),
+        Path("models/cnn/runs"),
     ]
     
-    print("🔍 Searching for models in:")
-    for runs_path in possible_paths:
-        print(f"  - {runs_path}")
+    # Also check specific paths based on your structure
+    current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+    possible_paths.extend([
+        current_dir / "models" / "yolo" / "runs",
+        current_dir / "models" / "cnn" / "runs",
+        current_dir / "yolo" / "runs",
+        current_dir / "cnn" / "runs",
+        current_dir / "runs",
+    ])
     
     for runs_path in possible_paths:
         if runs_path.exists():
-            print(f"✅ Checking runs directory: {runs_path}")
+            print(f"Checking runs directory: {runs_path}")
+            # Look for train directories
+            train_dirs = glob.glob(str(runs_path / "train*"))
+            train_dirs.extend(glob.glob(str(runs_path / "train")))
             
-            # First, look for version directories (v1, v2, etc.)
-            version_dirs = [d for d in runs_path.iterdir() if d.is_dir() and d.name.startswith('v')]
-            
-            # Also look for train directories directly
-            train_dirs = []
-            
-            # Check each version directory
-            for version_dir in version_dirs:
-                print(f"  📁 Checking version: {version_dir.name}")
-                
-                # Look for train directories inside version
-                for sub_dir in version_dir.iterdir():
-                    if sub_dir.is_dir() and (sub_dir.name.startswith('train') or sub_dir.name == 'train'):
-                        train_dirs.append(sub_dir)
-                        print(f"    Found train dir: {sub_dir}")
-                
-                # Also check for weights directly in version dir
-                weights_dir = version_dir / "weights"
-                if weights_dir.exists():
-                    for pt_file in weights_dir.glob("*.pt"):
-                        version_name = f"{version_dir.name}/{pt_file.stem}"
-                        models[version_name] = str(pt_file)
-                        print(f"    Found model: {version_name} -> {pt_file}")
-            
-            # Also look for train directories directly (not in version folders)
-            for item in runs_path.iterdir():
-                if item.is_dir() and (item.name.startswith('train') or item.name == 'train'):
-                    if item not in train_dirs:
-                        train_dirs.append(item)
-                        print(f"  Found train dir: {item}")
-            
-            # Process all train directories
             for train_dir in train_dirs:
-                weights_dir = train_dir / "weights"
-                if weights_dir.exists():
-                    print(f"  📂 Checking weights in: {weights_dir}")
-                    
-                    # Look for best.pt
-                    best_pt = weights_dir / "best.pt"
-                    if best_pt.exists():
-                        # Try to get version name from parent directory
-                        parent_name = train_dir.parent.name
-                        if parent_name.startswith('v'):
-                            version_name = f"{parent_name}/{train_dir.name}"
-                        else:
-                            version_name = train_dir.name
-                        
-                        # Make sure we don't duplicate
-                        if version_name not in models:
+                train_path = Path(train_dir)
+                if train_path.is_dir():
+                    # Check for weights directory
+                    weights_dir = train_path / "weights"
+                    if weights_dir.exists():
+                        # Look for best.pt
+                        best_pt = weights_dir / "best.pt"
+                        if best_pt.exists():
+                            version_name = train_path.name
                             models[version_name] = str(best_pt)
-                            print(f"  ✅ Found model: {version_name} -> {best_pt}")
-                    
-                    # Also look for other .pt files
-                    for pt_file in weights_dir.glob("*.pt"):
-                        if pt_file.name != "best.pt":
-                            parent_name = train_dir.parent.name
-                            if parent_name.startswith('v'):
-                                version_name = f"{parent_name}/{train_dir.name}/{pt_file.stem}"
-                            else:
-                                version_name = f"{train_dir.name}/{pt_file.stem}"
-                            
-                            if version_name not in models:
+                            print(f"Found model: {version_name} -> {best_pt}")
+                        
+                        # Also look for other .pt files
+                        for pt_file in weights_dir.glob("*.pt"):
+                            if pt_file.name != "best.pt":
+                                version_name = f"{train_path.name}/{pt_file.stem}"
                                 models[version_name] = str(pt_file)
-                                print(f"  ✅ Found model: {version_name} -> {pt_file}")
+                                print(f"Found model: {version_name} -> {pt_file}")
     
     # If no models found, try to find any .pt file in the directory
     if not models:
-        print("🔍 No models found in runs directories, searching for .pt files...")
+        print("No models found in runs directories, searching for .pt files...")
         search_paths = [
             current_dir,
-            current_dir / "model",
-            current_dir / "model" / "yolo",
+            current_dir / "models",
             current_dir / "yolo",
-            Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment"),
+            current_dir / "cnn",
         ]
         
         for search_path in search_paths:
             if search_path.exists():
-                print(f"  Searching in: {search_path}")
                 pt_files = list(search_path.glob("**/*.pt"))
                 for pt_file in pt_files:
                     # Skip if in runs directory (already checked)
                     if "runs" in str(pt_file):
                         continue
-                    # Skip if in venv or site-packages
-                    if "venv" in str(pt_file) or "site-packages" in str(pt_file):
-                        continue
                     version_name = f"{pt_file.parent.name}/{pt_file.stem}"
-                    if version_name not in models:
-                        models[version_name] = str(pt_file)
-                        print(f"  Found model: {version_name} -> {pt_file}")
+                    models[version_name] = str(pt_file)
+                    print(f"Found model: {version_name} -> {pt_file}")
     
-    # Specifically check for your model path
-    specific_model_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt")
-    if specific_model_path.exists():
-        models["v1/train/best"] = str(specific_model_path)
-        print(f"✅ Found specific model: v1/train/best -> {specific_model_path}")
-    
-    # If still no models, try to use the yolov8n.pt or similar
+    # If still no models, try default path
     if not models:
-        default_model = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\yolo26n.pt")
-        if default_model.exists():
-            models["default"] = str(default_model)
-            print(f"Using default model: {default_model}")
+        default_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\models\yolo\yolov1.pt")
+        if default_path.exists():
+            models["default"] = str(default_path)
+            print(f"Using default model: {default_path}")
     
-    print(f"📊 Found {len(models)} model(s): {list(models.keys())}")
     return models
 
 def load_dataset_yaml():
@@ -256,7 +198,7 @@ def load_dataset_yaml():
     # Check multiple possible locations
     yaml_paths = [
         Path("dataset.yaml"),
-        Path("model/yolo/dataset.yaml"),
+        Path("models/yolo/dataset.yaml"),
         Path("config/dataset.yaml"),
         Path("dataset/dataset.yaml"),
         Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset.yaml"),
@@ -266,7 +208,7 @@ def load_dataset_yaml():
     current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
     yaml_paths.extend([
         current_dir / "dataset.yaml",
-        current_dir / "model" / "yolo" / "dataset.yaml",
+        current_dir / "models" / "yolo" / "dataset.yaml",
         current_dir / "config" / "dataset.yaml",
     ])
     
@@ -332,9 +274,11 @@ def load_model(model_type, model_path, device='cpu'):
         return None
 
 class VideoProcessorWrapper:
-    def __init__(self, detector, speed_estimator):
+    """Wrapper class for video processing to handle missing modules"""
+    def __init__(self, detector, speed_estimator, frame_skip=2):
         self.detector = detector
         self.speed_estimator = speed_estimator
+        self.frame_skip = frame_skip
     
     def process_frame_sync(self, frame):
         """Process a single frame synchronously"""
@@ -367,6 +311,7 @@ def process_video_with_models(
     video_path,
     detector,
     dataset_config,
+    frame_skip=2,
     progress_callback=None,
     target_fps=60
 ):
@@ -377,6 +322,7 @@ def process_video_with_models(
         video_path: Path to video file
         detector: Detection model instance
         dataset_config: Dataset configuration dictionary
+        frame_skip: Process every Nth frame
         progress_callback: Callback for progress updates
         target_fps: Target FPS for output video (default: 60)
     """
@@ -393,6 +339,7 @@ def process_video_with_models(
     video_processor = VideoProcessorWrapper(
         detector=detector,
         speed_estimator=speed_estimator,
+        frame_skip=frame_skip
     )
     
     # Get class colors from config
@@ -410,10 +357,6 @@ def process_video_with_models(
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Define frame_skip - process every frame by default
-    # You can add this as a parameter if you want to skip frames
-    frame_skip = 1  # Process every frame
-    
     # Calculate frame interpolation for target FPS
     interpolation_factor = max(1, int(target_fps / original_fps))
     if interpolation_factor > 4:
@@ -425,7 +368,7 @@ def process_video_with_models(
     print(f"Original FPS: {original_fps}, Target FPS: {target_fps}, Interpolation: {interpolation_factor}")
     
     # Create output video writer
-    output_dir = Path("output/processed_videos")
+    output_dir = Path("outputs/processed_videos")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -468,7 +411,13 @@ def process_video_with_models(
             
             frame_count += 1
             
-            # Process frame (now we process every frame since frame_skip=1)
+            # Skip frames for performance
+            if frame_count % frame_skip != 0:
+                out.write(frame)
+                del frame
+                continue
+            
+            # Process frame
             try:
                 # Get detections
                 detections = video_processor.process_frame_sync(frame)
@@ -566,9 +515,9 @@ def process_video_with_models(
                 if processed_count % 50 == 0:
                     gc.collect()
                 
-                # Update progress - FIXED: Use frame_count and total_frames
+                # Update progress
                 if progress_callback and total_frames > 0:
-                    progress = min(frame_count / total_frames, 1.0)  # Cap at 1.0
+                    progress = frame_count / total_frames
                     progress_callback(progress, frame_count, total_frames)
                 
             except Exception as e:
@@ -581,9 +530,10 @@ def process_video_with_models(
         gc.collect()
         raise
     finally:
-        # Clean up resources
+        # Clean up resources - REMOVED cv2.destroyAllWindows()
         cap.release()
         out.release()
+        # cv2.destroyAllWindows()  # <-- REMOVE THIS LINE
     
     # Calculate final statistics
     results['processing_time'] = time.time() - start_time
@@ -817,7 +767,7 @@ def main():
             st.caption(f"Path: {model_path}")
         else:
             st.warning("⚠️ No trained models found in runs folder!")
-            st.info("📁 Expected location: `model/yolo/runs/train*/weights/best.pt`")
+            st.info("📁 Expected location: `models/yolo/runs/train*/weights/best.pt`")
             model_path = None
             selected_model = "None"
         
@@ -859,6 +809,14 @@ def main():
             max_value=0.9,
             value=0.5,
             step=0.05
+        )
+        
+        frame_skip = st.number_input(
+            "Frame Skip (1 = process all frames)",
+            min_value=1,
+            max_value=10,
+            value=2,
+            help="Higher values = faster processing"
         )
         
         # Add FPS selector
@@ -933,6 +891,7 @@ def main():
             # Placeholder stats
             st.metric("Selected Model", f"{model_type} - {selected_model}")
             st.metric("Confidence", f"{confidence_threshold:.2f}")
+            st.metric("Frame Skip", f"{frame_skip}")
             
             if uploaded_file is not None:
                 st.success("✅ Video loaded")
@@ -978,8 +937,8 @@ def main():
                     progress_bar = st.progress(0)
                     
                     def progress_callback(progress, current, total):
-                        progress_bar.progress(min(progress, 1.0))
-                        status_placeholder.text(f"Processing: {current}/{total} frames ({min(progress * 100, 100):.1f}%)")
+                        progress_bar.progress(progress)
+                        status_placeholder.text(f"Processing: {current}/{total} frames ({progress*100:.1f}%)")
                     
                     try:
                         status_placeholder.text("⏳ Processing video...")
@@ -988,6 +947,7 @@ def main():
                             video_path=video_source,
                             detector=detector,
                             dataset_config=dataset_config,
+                            frame_skip=frame_skip,
                             progress_callback=progress_callback,
                             target_fps=output_fps
                         )
