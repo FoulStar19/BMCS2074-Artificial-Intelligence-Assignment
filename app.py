@@ -4,23 +4,34 @@ Main Streamlit application for vehicle detection and speed estimation
 """
 
 import streamlit as st
-import cv2
-import torch
+import sys
 import os
 import tempfile
 import time
-import numpy as np
-import pandas as pd
+import gc
 from pathlib import Path
 from datetime import datetime
+import yaml
+
+# Import OpenCV with fallback
+try:
+    import cv2
+except ImportError:
+    # Try to import headless version if available
+    try:
+        import cv2
+    except ImportError:
+        st.error("OpenCV not available. Please install opencv-python-headless")
+        cv2 = None
+
+import torch
+import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from PIL import Image
-import yaml
 import shutil
 import glob
-import sys
-import gc  # Add garbage collection
 
 # Add current directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -47,7 +58,7 @@ except ImportError as e:
     class DummyDetector:
         def detect(self, frame):
             # Simulate detections
-            h, w = frame.shape[:2]
+            h, w = frame.shape[:2] if frame is not None else (480, 640)
             return [{'bbox': [100, 100, 200, 300], 'confidence': 0.95, 'class': 0} for _ in range(5)]
         
         def detect_frame(self, frame):
@@ -101,6 +112,8 @@ def initialize_session_state():
         st.session_state.is_processing = False
     if 'video_processed' not in st.session_state:
         st.session_state.video_processed = False
+    if 'frame_skip' not in st.session_state:
+        st.session_state.frame_skip = 1
 
 def get_available_models():
     """
@@ -384,6 +397,9 @@ def process_video_with_models(
         progress_callback: Callback for progress updates
         target_fps: Target FPS for output video (default: 60)
     """
+    if cv2 is None:
+        raise ImportError("OpenCV is not available. Please install opencv-python-headless")
+    
     # Initialize components
     try:
         if SpeedEstimator:
@@ -456,10 +472,6 @@ def process_video_with_models(
     start_time = time.time()
     prev_frame = None
     prev_detections = None
-    
-    # For batch processing to improve performance
-    batch_size = 5
-    frame_buffer = []
     
     try:
         while True:
@@ -588,10 +600,9 @@ def process_video_with_models(
         gc.collect()
         raise
     finally:
-        # Clean up resources - REMOVED cv2.destroyAllWindows()
+        # Clean up resources
         cap.release()
         out.release()
-        # cv2.destroyAllWindows()  # <-- REMOVE THIS LINE
     
     # Calculate final statistics
     results['processing_time'] = time.time() - start_time
@@ -877,6 +888,15 @@ def main():
             help="Select the output video FPS"
         )
         
+        frame_skip = st.slider(
+            "Frame Skip",
+            min_value=1,
+            max_value=10,
+            value=st.session_state.frame_skip,
+            help="Process every Nth frame (higher = faster processing)"
+        )
+        st.session_state.frame_skip = frame_skip
+        
         device = st.radio(
             "Processing Device",
             options=["Auto", "CPU", "CUDA"],
@@ -896,7 +916,7 @@ def main():
         st.markdown("---")
         st.subheader("🖥️ System Info")
         
-        cuda_available = torch.cuda.is_available()
+        cuda_available = torch.cuda.is_available() if torch else False
         device_info = "CUDA" if cuda_available else "CPU"
         st.info(f"Device: {device_info}")
         
@@ -966,6 +986,8 @@ def main():
                 st.error("⚠️ Please upload a video or select a sample")
             elif model_path is None:
                 st.error("⚠️ No model selected! Please check your runs folder.")
+            elif cv2 is None:
+                st.error("⚠️ OpenCV is not available. Please check your installation.")
             else:
                 # Determine device
                 if device == "Auto":
