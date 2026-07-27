@@ -198,12 +198,20 @@ def display_results_tab(results, output_video_path):
         # Display detection chart
         fig_detections = generator.create_detection_chart()
         if fig_detections:
-            st.plotly_chart(fig_detections, use_container_width=True)
+            st.plotly_chart(
+                fig_detections, 
+                use_container_width=True,
+                key="detection_chart_results"  # Added unique key
+            )
         
         # Display density chart
         fig_density = generator.create_density_chart()
         if fig_density:
-            st.plotly_chart(fig_density, use_container_width=True)
+            st.plotly_chart(
+                fig_density, 
+                use_container_width=True,
+                key="density_chart_results"  # Added unique key
+            )
         
         # Data table
         with st.expander("📋 View Detailed Data"):
@@ -245,12 +253,20 @@ def display_analytics_tab(results):
     with col1:
         fig_detections = generator.create_detection_chart()
         if fig_detections:
-            st.plotly_chart(fig_detections, use_container_width=True)
+            st.plotly_chart(
+                fig_detections, 
+                use_container_width=True,
+                key="detection_chart_analytics"  # Added unique key
+            )
     
     with col2:
         fig_density = generator.create_density_chart()
         if fig_density:
-            st.plotly_chart(fig_density, use_container_width=True)
+            st.plotly_chart(
+                fig_density, 
+                use_container_width=True,
+                key="density_chart_analytics"  # Added unique key
+            )
     
     # Export options
     st.subheader("📥 Export Data")

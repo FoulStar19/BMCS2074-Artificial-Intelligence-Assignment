@@ -1,5 +1,3 @@
-libgl1-mesa-glx
-libglib2.0-0t64
-libsm6
-libxext6
-libxrender1
+version https://git-lfs.github.com/spec/v1
+oid sha256:a0ecb6e7e68f6d7fe8e235674ea68a6d73bc6c3909b0006570ffd681de445640
+size 60
