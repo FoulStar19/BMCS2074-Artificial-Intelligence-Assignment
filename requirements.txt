@@ -1,3 +1,10 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:3b6996ed3fe3811a7dfaef7451b0de867ecb1a748fb3831e68e1336f9c308ed8
-size 201
+streamlit>=1.28.0
+opencv-python-headless==4.8.1.78
+numpy>=1.24.0
+pandas>=2.0.0
+plotly>=5.17.0
+Pillow>=10.0.0
+pyyaml>=6.0
+ultralytics>=8.0.0
+torch>=2.0.0
+torchvision>=0.15.0
