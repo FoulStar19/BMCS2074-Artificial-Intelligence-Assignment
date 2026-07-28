@@ -8,7 +8,6 @@ import sys
 import os
 import tempfile
 import gc
-import base64
 from pathlib import Path
 import torch
 
@@ -217,7 +216,7 @@ def main():
                             progress_callback=progress_callback
                         )
                         
-                        # Store results
+                        # Store results - FIX: Access as dictionary
                         SessionManager.set(SessionManager.CURRENT_RESULTS, results)
                         SessionManager.set(SessionManager.PROCESSED_VIDEO_PATH, output_path)
                         SessionManager.set(SessionManager.VIDEO_PROCESSED, True)
@@ -255,11 +254,13 @@ def main():
                         torch.cuda.empty_cache()
         
         # Show quick results if available
+        # FIX: Use SessionManager.get() to retrieve results
         current_results = SessionManager.get(SessionManager.CURRENT_RESULTS)
         video_processed = SessionManager.get(SessionManager.VIDEO_PROCESSED, False)
         
         if current_results is not None and video_processed:
             with st.expander("📊 Quick Results", expanded=True):
+                # FIX: Access results as dictionary
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
                     st.metric("Total Vehicles", current_results.get('total_vehicles', 0))
@@ -274,12 +275,16 @@ def main():
     # TAB 2: Results
     # ==========================
     with tab2:
+        # FIX: Use SessionManager.get() to retrieve results
         current_results = SessionManager.get(SessionManager.CURRENT_RESULTS)
         processed_video_path = SessionManager.get(SessionManager.PROCESSED_VIDEO_PATH)
         video_processed = SessionManager.get(SessionManager.VIDEO_PROCESSED, False)
         
         if current_results is not None and video_processed:
-            display_enhanced_results_tab(current_results, processed_video_path)
+            ui.display_results_tab(
+                current_results,
+                processed_video_path
+            )
         else:
             st.info("📊 No results to display. Process a video first.")
     
@@ -287,135 +292,9 @@ def main():
     # TAB 3: Analytics
     # ==========================
     with tab3:
+        # FIX: Use SessionManager.get() to retrieve results
         current_results = SessionManager.get(SessionManager.CURRENT_RESULTS)
         ui.display_analytics_tab(current_results)
-
-
-def display_enhanced_results_tab(results, output_video_path):
-    """
-    Enhanced results tab with HTML5 video player
-    
-    Args:
-        results: Results dictionary
-        output_video_path: Path to processed video
-    """
-    if results is None or not results:
-        st.info("📊 No results to display. Process a video first.")
-        return
-    
-    # Import here to avoid circular imports
-    from backend.analytics.report_generator import display_metrics, ReportGenerator
-    
-    # Display statistics
-    display_metrics(results)
-    
-    # Display processed video
-    if output_video_path and os.path.exists(output_video_path):
-        st.subheader("📹 Processed Video")
-        
-        try:
-            file_size = os.path.getsize(output_video_path)
-            file_size_mb = file_size / (1024 * 1024)
-            
-            # Show file info
-            if file_size_mb > 100:
-                st.info(f"📁 File: {os.path.basename(output_video_path)} ({file_size_mb:.1f} MB) - Large file may take time to load")
-            else:
-                st.info(f"📁 File: {os.path.basename(output_video_path)} ({file_size_mb:.1f} MB)")
-            
-            # Read video bytes
-            with open(output_video_path, 'rb') as f:
-                video_bytes = f.read()
-            
-            # Display video using HTML5 player with controls
-            video_base64 = base64.b64encode(video_bytes).decode('utf-8')
-            
-            # Create responsive video player with better compatibility
-            video_html = f'''
-                <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; background: #000; border-radius: 8px; margin: 10px 0;">
-                    <video style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" controls autoplay muted playsinline>
-                        <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
-                        <source src="data:video/mp4;base64,{video_base64}" type="video/avc">
-                        <p>Your browser does not support the video tag. Please download the video using the button below.</p>
-                    </video>
-                </div>
-            '''
-            st.markdown(video_html, unsafe_allow_html=True)
-            
-            # Download button
-            st.download_button(
-                label="📥 Download Processed Video",
-                data=video_bytes,
-                file_name=os.path.basename(output_video_path),
-                mime="video/mp4",
-                use_container_width=True,
-                key="download_video_main"
-            )
-            
-            # Show file path for debugging
-            with st.expander("📂 Video File Info"):
-                st.code(f"Path: {output_video_path}")
-                st.code(f"Size: {file_size_mb:.2f} MB")
-                
-        except Exception as e:
-            st.error(f"Error displaying video: {e}")
-            st.info(f"Video saved at: {output_video_path}")
-            
-            # Offer fallback download
-            try:
-                with open(output_video_path, 'rb') as f:
-                    video_bytes = f.read()
-                    st.download_button(
-                        label="📥 Download Video (Fallback)",
-                        data=video_bytes,
-                        file_name=os.path.basename(output_video_path),
-                        mime="video/mp4",
-                        use_container_width=True,
-                        key="download_video_fallback"
-                    )
-            except Exception as e2:
-                st.error(f"Could not read video file: {e2}")
-    else:
-        st.warning("⚠️ No processed video found. Please process a video first.")
-    
-    # Display analytics
-    st.subheader("📊 Analytics")
-    
-    generator = ReportGenerator(results)
-    
-    if generator.dataframe is not None and not generator.dataframe.empty:
-        # Display detection chart
-        fig_detections = generator.create_detection_chart()
-        if fig_detections:
-            st.plotly_chart(
-                fig_detections, 
-                use_container_width=True,
-                key="detection_chart_results"
-            )
-        
-        # Display density chart
-        fig_density = generator.create_density_chart()
-        if fig_density:
-            st.plotly_chart(
-                fig_density, 
-                use_container_width=True,
-                key="density_chart_results"
-            )
-        
-        # Data table
-        with st.expander("📋 View Detailed Data"):
-            st.dataframe(generator.dataframe, use_container_width=True)
-            
-            csv_data = generator.export_csv()
-            if csv_data:
-                st.download_button(
-                    label="📥 Download CSV Report",
-                    data=csv_data,
-                    file_name=f"traffic_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-    else:
-        st.info("No detailed data available for analytics.")
 
 
 if __name__ == "__main__":
