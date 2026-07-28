@@ -214,12 +214,29 @@ class VideoProcessingService:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = output_dir / f"processed_{timestamp}.mp4"
         
-        # Create video writer
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+        # Create video writer with browser-compatible codec
+        out = None
+        fourcc_options = [
+            cv2.VideoWriter_fourcc(*'avc1'),  # H.264 - most compatible
+            cv2.VideoWriter_fourcc(*'mp4v'),  # MP4V - fallback
+            cv2.VideoWriter_fourcc(*'X264'),  # X264 - alternative
+            cv2.VideoWriter_fourcc(*'MJPG'),  # MJPEG - last resort
+        ]
         
-        if not out.isOpened():
-            raise RuntimeError("Could not create video writer")
+        for fourcc in fourcc_options:
+            try:
+                out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+                if out.isOpened():
+                    print(f"✅ Using codec: {fourcc}")
+                    break
+                else:
+                    out.release()
+                    out = None
+            except:
+                continue
+        
+        if out is None:
+            raise RuntimeError("Could not create video writer with any codec")
         
         # Results storage
         results = {
@@ -402,8 +419,21 @@ class VideoProcessingService:
             self.is_processing = False
             raise e
         finally:
+            # Ensure proper cleanup
             cap.release()
-            out.release()
+            if out is not None:
+                out.release()
+            
+            # Wait for file to be fully written
+            time.sleep(0.5)
+            
+            # Verify file exists and has content
+            if output_path and output_path.exists():
+                file_size = output_path.stat().st_size
+                print(f"📊 Output file size: {file_size / (1024*1024):.2f} MB")
+                if file_size < 1000:
+                    print("⚠️ Warning: Output file is very small - may be corrupted")
+            
             gc.collect()
     
     def get_progress(self):

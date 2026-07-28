@@ -173,21 +173,54 @@ def display_results_tab(results, output_video_path):
             file_size_mb = file_size / (1024 * 1024)
             st.info(f"📁 File: {os.path.basename(output_video_path)} ({file_size_mb:.1f} MB)")
             
-            st.video(output_video_path)
-            
-            # Download button
+            # Read video bytes
             with open(output_video_path, 'rb') as f:
                 video_bytes = f.read()
-                st.download_button(
-                    label="📥 Download Processed Video",
-                    data=video_bytes,
-                    file_name=os.path.basename(output_video_path),
-                    mime="video/mp4",
-                    use_container_width=True
-                )
+            
+            # Display video using HTML5 player with controls
+            video_base64 = base64.b64encode(video_bytes).decode('utf-8')
+            
+            # Create responsive video player
+            video_html = f'''
+                <div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; background: #000; border-radius: 8px;">
+                    <video style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" controls autoplay muted>
+                        <source src="data:video/mp4;base64,{video_base64}" type="video/mp4">
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+            '''
+            st.markdown(video_html, unsafe_allow_html=True)
+            
+            # Download button
+            st.download_button(
+                label="📥 Download Processed Video",
+                data=video_bytes,
+                file_name=os.path.basename(output_video_path),
+                mime="video/mp4",
+                use_container_width=True,
+                key="download_video_main"
+            )
+            
         except Exception as e:
             st.error(f"Error displaying video: {e}")
             st.info(f"Video saved at: {output_video_path}")
+            
+            # Offer fallback download
+            try:
+                with open(output_video_path, 'rb') as f:
+                    video_bytes = f.read()
+                    st.download_button(
+                        label="📥 Download Video (Fallback)",
+                        data=video_bytes,
+                        file_name=os.path.basename(output_video_path),
+                        mime="video/mp4",
+                        use_container_width=True,
+                        key="download_video_fallback"
+                    )
+            except:
+                pass
+    else:
+        st.warning("⚠️ No processed video found. Please process a video first.")
     
     # Display analytics
     st.subheader("📊 Analytics")
@@ -201,7 +234,7 @@ def display_results_tab(results, output_video_path):
             st.plotly_chart(
                 fig_detections, 
                 use_container_width=True,
-                key="detection_chart_results"  # Added unique key
+                key="detection_chart_results"
             )
         
         # Display density chart
@@ -210,7 +243,7 @@ def display_results_tab(results, output_video_path):
             st.plotly_chart(
                 fig_density, 
                 use_container_width=True,
-                key="density_chart_results"  # Added unique key
+                key="density_chart_results"
             )
         
         # Data table
@@ -256,7 +289,7 @@ def display_analytics_tab(results):
             st.plotly_chart(
                 fig_detections, 
                 use_container_width=True,
-                key="detection_chart_analytics"  # Added unique key
+                key="detection_chart_analytics"
             )
     
     with col2:
@@ -265,7 +298,7 @@ def display_analytics_tab(results):
             st.plotly_chart(
                 fig_density, 
                 use_container_width=True,
-                key="density_chart_analytics"  # Added unique key
+                key="density_chart_analytics"
             )
     
     # Export options
