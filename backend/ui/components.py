@@ -173,8 +173,6 @@ def display_results_tab(results, output_video_path):
             file_size_mb = file_size / (1024 * 1024)
             st.info(f"📁 File: {os.path.basename(output_video_path)} ({file_size_mb:.1f} MB)")
             
-            st.video(output_video_path)
-            
             # Download button
             with open(output_video_path, 'rb') as f:
                 video_bytes = f.read()
