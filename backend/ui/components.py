@@ -33,8 +33,12 @@ def display_sidebar(model_manager, available_models):
         )
         
         # Model version selection
-        if available_models:
-            sorted_models = sorted(available_models.keys())
+        compatible_models = [
+            name for name in available_models
+            if (model_type == "CNN") == name.startswith("CNN/")
+        ]
+        if compatible_models:
+            sorted_models = sorted(compatible_models)
             selected_model = st.selectbox(
                 "Model Version",
                 options=sorted_models,
@@ -43,7 +47,7 @@ def display_sidebar(model_manager, available_models):
             model_path = available_models[selected_model]
             st.info(f"📁 {os.path.basename(model_path)}")
         else:
-            st.warning("⚠️ No trained models found in runs folder!")
+            st.warning(f"⚠️ No trained {model_type} model found.")
             selected_model = "None"
             model_path = None
         
@@ -67,7 +71,7 @@ def display_sidebar(model_manager, available_models):
             "Confidence Threshold",
             min_value=0.1,
             max_value=0.9,
-            value=0.25,
+            value=0.70 if model_type == "CNN" else 0.25,
             step=0.05,
             help="Minimum confidence score for detections"
         )

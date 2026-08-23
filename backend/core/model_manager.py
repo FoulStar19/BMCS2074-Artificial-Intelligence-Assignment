@@ -40,10 +40,14 @@ class ModelManager:
             Dictionary of model versions and paths
         """
         models = {}
-        
-        # Get the absolute path to the project root
-        # Navigate from backend/core to project root
-        project_root = self.base_dir.parent.parent if self.base_dir.name == 'core' else self.base_dir
+
+        # Get the actual project root
+        if self.base_dir.name == "backend":
+            project_root = self.base_dir.parent
+        elif self.base_dir.name == "core":
+            project_root = self.base_dir.parent.parent
+        else:
+            project_root = self.base_dir
         
         # Define search paths - use project_root as base
         search_paths = [
@@ -167,6 +171,13 @@ class ModelManager:
                                 if key not in models:
                                     models[key] = str(pt_file)
                                     print(f"  ✅ Found: {key}")
+
+        # CNN checkpoints use a different format from YOLO weights. Keep them
+        # discoverable without mixing them into the YOLO model selector.
+        cnn_checkpoint = project_root / "model" / "cnn" / "saved_model" / "best_car_detector.pth"
+        if cnn_checkpoint.exists():
+            models["CNN/car_detector"] = str(cnn_checkpoint)
+            print(f"✅ Found CNN checkpoint: {cnn_checkpoint}")
         
         # Sort models for consistent display
         self.models = dict(sorted(models.items()))

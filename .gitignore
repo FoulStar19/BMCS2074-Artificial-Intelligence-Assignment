@@ -1,0 +1,178 @@
+# ============================================================
+# BMCS2074 Artificial Intelligence Assignment
+# Git Ignore File
+# ============================================================
+
+
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
+
+# ============================================================
+# Virtual Environment
+# ============================================================
+
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+
+# ============================================================
+# IDE / Editor
+# ============================================================
+
+.vscode/
+.idea/
+
+# VS Code temporary files
+*.code-workspace
+
+# Jupyter
+.ipynb_checkpoints/
+
+
+# ============================================================
+# Operating System
+# ============================================================
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+
+# ============================================================
+# Temporary Files
+# ============================================================
+
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+
+# ============================================================
+# Generated Output
+# ============================================================
+
+output/
+
+# Generated reports
+*.html
+
+# Generated CSV / JSON reports
+# IMPORTANT:
+# Do NOT ignore all CSV/JSON because some may be important.
+# Only ignore generated report files if necessary.
+
+
+# ============================================================
+# Video Files
+# ============================================================
+
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.webm
+
+
+# ============================================================
+# YOLO Model Weights
+# ============================================================
+
+# Pretrained / trained model weights
+*.pt
+*.pth
+*.onnx
+
+# YOLO training runs
+model/yolo/runs/
+
+
+# ============================================================
+# CNN Generated Model
+# ============================================================
+
+# Trained CNN model and generated evaluation results
+model/cnn/saved_model/
+
+
+# ============================================================
+# Dataset Generated / Large Data
+# ============================================================
+
+# CNN datasets
+dataset/cnn_dataset/
+dataset/cnn_car_background/
+
+# YOLO generated dataset files
+dataset/yolo_dataset/
+
+# If your dataset contains these large files
+*.zip
+*.rar
+*.7z
+
+
+# ============================================================
+# Logs
+# ============================================================
+
+*.log
+
+
+# ============================================================
+# Streamlit
+# ============================================================
+
+.streamlit/secrets.toml
+
+
+# ============================================================
+# Generated Python Distribution Files
+# ============================================================
+
+*.egg-info/
+dist/
+build/
+
+
+# ============================================================
+# Local Environment / Secrets
+# ============================================================
+
+.env
+.env.*
+!.env.example
+
+
+# ============================================================
+# OS / Application generated files
+# ============================================================
+
+*.db
+*.sqlite
+*.sqlite3
