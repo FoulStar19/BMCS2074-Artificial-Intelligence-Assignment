@@ -24,7 +24,8 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             options=["YOLO", "CNN"],
             help="Select the detection model type"
         )
-
+        
+        # Model version selection
         if available_models:
             sorted_models = sorted(available_models.keys())
             selected_model = st.selectbox(
@@ -35,7 +36,7 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             model_path = available_models[selected_model]
             st.info(f"📁 {os.path.basename(model_path)}")
         else:
-            st.warning("⚠️ No trained models found in runs folder!")
+            st.warning(f"⚠️ No trained {model_type} model found.")
             selected_model = "None"
             model_path = None
 
@@ -57,7 +58,7 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             "Confidence Threshold",
             min_value=0.1,
             max_value=0.9,
-            value=0.25,
+            value=0.70 if model_type == "CNN" else 0.25,
             step=0.05,
             help="Minimum confidence score for detections",
         )
@@ -259,4 +260,4 @@ def display_processing_status(status_placeholder, progress_bar, progress: float,
                              current: int, total: int):
     """Display processing status updates."""
     progress_bar.progress(progress)
-    status_placeholder.text(f"Processing: {current}/{total} frames ({progress * 100:.1f}%)")
+    status_placeholder.text(f"Processing: {current}/{total} frames ({progress*100:.1f}%)")
