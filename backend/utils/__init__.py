@@ -1,8 +1,9 @@
 """
-Utility functions for traffic analysis
+Utility functions module.
 """
 
-from .helpers import (
+from backend.utils.helpers import (
+    get_video_properties,
     load_dataset_config,
     get_model_versions,
     get_class_colors,
@@ -12,10 +13,10 @@ from .helpers import (
     normalize_box,
     denormalize_box,
     calculate_iou,
-    get_video_properties
 )
 
 __all__ = [
+    'get_video_properties',
     'load_dataset_config',
     'get_model_versions',
     'get_class_colors',
@@ -25,5 +26,4 @@ __all__ = [
     'normalize_box',
     'denormalize_box',
     'calculate_iou',
-    'get_video_properties'
 ]

@@ -1,8 +1,12 @@
+# backend/detection/__init__.py
 """
-Detection module for vehicle detection models
+Detection module for vehicle detection.
 """
 
-from .yolo_detector import YOLODetector
-from .cnn_detector import CNNDetector
+from backend.detection.yolo_detector import YOLODetector
+from backend.detection.cnn_detector import CNNDetector
 
-__all__ = ['YOLODetector', 'CNNDetector']
+__all__ = [
+    'YOLODetector',
+    'CNNDetector'
+]
