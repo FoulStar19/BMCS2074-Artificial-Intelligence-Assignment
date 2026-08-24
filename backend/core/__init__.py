@@ -1,14 +1,13 @@
-# backend/core/__init__.py
 """
-Core modules for the backend
+Core backend modules.
 """
 
-from .model_manager import ModelManager
-from .video_processor_service import VideoProcessingService
-from .session_manager import SessionManager
+from backend.core.model_manager import ModelManager
+from backend.core.session_manager import SessionManager
+from backend.core.video_processor_service import VideoProcessingService
 
 __all__ = [
     'ModelManager',
+    'SessionManager',
     'VideoProcessingService',
-    'SessionManager'
 ]

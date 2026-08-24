@@ -1,7 +1,10 @@
 """
-Analytics module for the backend
+Analytics module for report generation and visualization.
 """
 
-from .report_generator import ReportGenerator
+from backend.analytics.report_generator import ReportGenerator, display_metrics
 
-__all__ = ['ReportGenerator']
+__all__ = [
+    'ReportGenerator',
+    'display_metrics',
+]
