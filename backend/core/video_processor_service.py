@@ -6,12 +6,16 @@ import gc
 import os
 import sys
 import time
-import gc
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
+
 import numpy as np
-import sys
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 # Add parent directory to path
 current_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -382,6 +386,10 @@ class VideoProcessingService:
                 # Calculate density
                 density = self.calculate_density(frame_detections, frame.shape)
                 results['density'].append(density)
+
+                # Record average speed for this frame
+                frame_speeds = [d['speed'] for d in frame_detections if d.get('speed', 0) > 0]
+                results['speeds'].append(float(np.mean(frame_speeds)) if frame_speeds else 0.0)
                 
                 # Write frame
                 out.write(frame)

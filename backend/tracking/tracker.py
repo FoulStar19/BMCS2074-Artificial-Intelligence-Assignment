@@ -6,7 +6,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-import time
+
+import cv2
+import numpy as np
 
 
 @dataclass
@@ -303,9 +305,9 @@ class VehicleTracker:
             track = TrackedVehicle(
                 track_id=track_id,
                 bbox=list(bbox),
-                center=center,
-                class_id=class_id,
-                confidence=confidence
+                center=(center_x, center_y),
+                class_id=det.get('class', 0),
+                confidence=det.get('confidence', 0.8)
             )
             track.history.append((center_x, center_y, time.time()))
             

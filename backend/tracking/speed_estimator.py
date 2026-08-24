@@ -6,7 +6,9 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Tuple
-import time
+
+import cv2
+import numpy as np
 
 
 @dataclass
@@ -242,6 +244,7 @@ class SpeedEstimator:
                 "total_samples": 0
             }
         
+        speeds = self.all_speeds
         return {
             "avg_speed": round(float(np.mean(speeds)), 2),
             "max_speed": round(float(np.max(speeds)), 2),

@@ -23,6 +23,8 @@ class ModelManager:
         self.model_path = None
         self.device = "cpu"
         self.conf_threshold = 0.25
+        self.base_dir = Path(__file__).resolve().parent
+        self.models = {}
 
     @staticmethod
     def load_dataset_config(config_path: Optional[str] = None) -> Dict[str, Any]:
@@ -172,26 +174,13 @@ class ModelManager:
                 project_root / "model" / "yolo",
                 project_root / "yolo",
             ]
-            for path in alt_paths:
+            for path in fallback_paths:
                 if path.exists():
-                    runs_path = path
-                    break
-
-        if runs_path.exists():
-            for run_dir in runs_path.iterdir():
-                if run_dir.is_dir():
-                    weights_dir = run_dir / "weights"
-                    if weights_dir.exists():
-                        weight_files = list(weights_dir.glob("best.pt")) + list(weights_dir.glob("*.pt"))
-                        for weight_file in weight_files:
-                            # If we have both best.pt and other .pt, prefer best.pt
-                            if weight_file.name == "best.pt":
-                                version_name = f"{run_dir.name}/best"
-                            else:
-                                key = f"{pt_file.parent.name}/{pt_file.stem}"
-                                if key not in models:
-                                    models[key] = str(pt_file)
-                                    print(f"  ✅ Found: {key}")
+                    for pt_file in path.glob("**/*.pt"):
+                        key = f"{pt_file.parent.name}/{pt_file.stem}"
+                        if key not in models:
+                            models[key] = str(pt_file)
+                            print(f"  ✅ Found: {key}")
         
         # Sort models for consistent display
         self.models = dict(sorted(models.items()))
@@ -255,61 +244,3 @@ class ModelManager:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-    
-    @staticmethod
-    def load_dataset_config():
-        """
-        Load dataset configuration from YAML file
-        
-        Returns:
-            Configuration dictionary
-        """
-        yaml_paths = [
-            Path("dataset.yaml"),
-            Path("model/yolo/dataset.yaml"),
-            Path("config/dataset.yaml"),
-            Path("dataset/dataset.yaml"),
-        ]
-        
-        current_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        project_root = current_dir.parent.parent if current_dir.name == 'core' else current_dir.parent
-        
-        yaml_paths.extend([
-            project_root / "dataset.yaml",
-            project_root / "model" / "yolo" / "dataset.yaml",
-            project_root / "config" / "dataset.yaml",
-            current_dir / "dataset.yaml",
-            current_dir / "model" / "yolo" / "dataset.yaml",
-        ])
-        
-        explicit_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\dataset.yaml")
-        yaml_paths.append(explicit_path)
-        
-        for yaml_path in yaml_paths:
-            if yaml_path.exists():
-                try:
-                    with open(yaml_path, 'r') as f:
-                        config = yaml.safe_load(f)
-                    print(f"✅ Loaded dataset config from: {yaml_path}")
-                    return config
-                except Exception as e:
-                    print(f"⚠️ Error loading {yaml_path}: {e}")
-        
-        print("ℹ️ Using default dataset configuration")
-        return {
-            'nc': 5,
-            'names': {
-                0: 'car',
-                1: 'truck',
-                2: 'bus',
-                3: 'motorcycle',
-                4: 'bicycle'
-            },
-            'colors': {
-                0: [0, 0, 255],
-                1: [0, 255, 0],
-                2: [255, 0, 0],
-                3: [0, 255, 255],
-                4: [255, 0, 255]
-            }
-        }
