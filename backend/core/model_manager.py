@@ -12,6 +12,7 @@ from typing import Dict, Optional, Any
 import torch
 
 from backend.detection.yolo_detector import YOLODetector
+from backend.detection.cnn_detector import CNNDetector
 
 
 class ModelManager:
@@ -63,13 +64,13 @@ class ModelManager:
         }
 
     def discover_models(self, runs_dir: str = "model/yolo/runs") -> Dict[str, str]:
-        """Discover available trained models."""
+        """Discover available trained models (YOLO .pt weights and the CNN checkpoint)."""
         models = {}
-        
+
         # Get the absolute path to the project root
         # Navigate from backend/core to project root
         project_root = self.base_dir.parent.parent if self.base_dir.name == 'core' else self.base_dir
-        
+
         # Define search paths - use project_root as base
         search_paths = [
             project_root / "model" / "yolo" / "runs",
@@ -77,7 +78,7 @@ class ModelManager:
             project_root / "yolo" / "runs",
             project_root / "runs",
         ]
-        
+
         # Also search from current directory
         current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
         search_paths.extend([
@@ -86,72 +87,72 @@ class ModelManager:
             current_dir.parent.parent / "yolo" / "runs",
             current_dir.parent.parent / "runs",
         ])
-        
+
         # Add explicit path from train_model.py
         explicit_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs")
         search_paths.append(explicit_path)
-        
+
         print(f"🔍 Searching for models in {len(search_paths)} locations...")
         print(f"📁 Project root: {project_root}")
-        
+
         for runs_path in search_paths:
             if runs_path.exists():
                 print(f"✅ Checking: {runs_path}")
-                
+
                 # Look for version directories
                 for item in runs_path.iterdir():
                     if item.is_dir():
                         # Check for version directories (v1, v2, etc.)
                         if item.name.startswith('v') and item.name[1:].isdigit():
                             print(f"  📁 Found version: {item.name}")
-                            
+
                             # Check for weights directory directly in version folder
                             weights_dir = item / "weights"
                             if weights_dir.exists():
                                 for pt_file in weights_dir.glob("*.pt"):
-                                    key = f"{item.name}/{pt_file.stem}"
+                                    key = f"YOLO/{item.name}/{pt_file.stem}"
                                     models[key] = str(pt_file)
                                     print(f"    ✅ Found: {key}")
-                            
+
                             # Look for train subdirectories in version folder
                             for sub_dir in item.iterdir():
                                 if sub_dir.is_dir() and (sub_dir.name.startswith('train') or sub_dir.name == 'train'):
                                     weights_dir = sub_dir / "weights"
                                     if weights_dir.exists():
                                         for pt_file in weights_dir.glob("*.pt"):
-                                            key = f"{item.name}/{sub_dir.name}/{pt_file.stem}"
+                                            key = f"YOLO/{item.name}/{sub_dir.name}/{pt_file.stem}"
                                             models[key] = str(pt_file)
                                             print(f"    ✅ Found: {key}")
-                            
+
                             # Look for other subdirectories that might contain weights
                             for sub_dir in item.iterdir():
                                 if sub_dir.is_dir() and sub_dir.name not in ['train']:
                                     weights_dir = sub_dir / "weights"
                                     if weights_dir.exists():
                                         for pt_file in weights_dir.glob("*.pt"):
-                                            key = f"{item.name}/{sub_dir.name}/{pt_file.stem}"
+                                            key = f"YOLO/{item.name}/{sub_dir.name}/{pt_file.stem}"
                                             models[key] = str(pt_file)
                                             print(f"    ✅ Found: {key}")
-                        
+
                         # Look for train directories directly
                         elif item.name.startswith('train') or item.name == 'train':
                             weights_dir = item / "weights"
                             if weights_dir.exists():
                                 for pt_file in weights_dir.glob("*.pt"):
-                                    key = f"{item.name}/{pt_file.stem}"
+                                    key = f"YOLO/{item.name}/{pt_file.stem}"
                                     models[key] = str(pt_file)
                                     print(f"  ✅ Found: {key}")
-        
+
         # Specific check for the known model path
         known_model_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt")
         if known_model_path.exists():
-            key = "v1/train/best"
+            key = "YOLO/v1/train/best"
             if key not in models:
                 models[key] = str(known_model_path)
                 print(f"✅ Found specific model: {key}")
         else:
             print(f"⚠️ Known model path not found: {known_model_path}")
-        
+
         # Check if the v1 directory exists but doesn't have the train subdirectory
         v1_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1")
         if v1_path.exists():
@@ -160,11 +161,11 @@ class ModelManager:
             for pt_file in v1_path.glob("**/*.pt"):
                 # Create a relative key from v1
                 relative_path = pt_file.relative_to(v1_path)
-                key = f"v1/{relative_path.parent.name}/{relative_path.stem}"
+                key = f"YOLO/v1/{relative_path.parent.name}/{relative_path.stem}"
                 if key not in models:
                     models[key] = str(pt_file)
                     print(f"  ✅ Found: {key}")
-        
+
         # Fallback: look for any .pt files in the project
         if not models:
             print("🔍 No models found in runs, searching for .pt files...")
@@ -177,32 +178,49 @@ class ModelManager:
             for path in fallback_paths:
                 if path.exists():
                     for pt_file in path.glob("**/*.pt"):
-                        key = f"{pt_file.parent.name}/{pt_file.stem}"
+                        key = f"YOLO/{pt_file.parent.name}/{pt_file.stem}"
                         if key not in models:
                             models[key] = str(pt_file)
                             print(f"  ✅ Found: {key}")
-        
+
+        # CNN checkpoint(s) - was previously never discovered, so the CNN
+        # backend had no path to select even after a load_model() branch
+        # existed for it. Keys are prefixed "CNN/" (mirroring the "YOLO/"
+        # prefix added above) so the sidebar can group/filter by backend.
+        cnn_search_paths = [
+            project_root / "model" / "cnn" / "saved_model",
+            current_dir.parent.parent / "model" / "cnn" / "saved_model",
+        ]
+        for cnn_dir in cnn_search_paths:
+            if cnn_dir.exists():
+                for pth_file in cnn_dir.glob("*.pth"):
+                    key = f"CNN/{pth_file.stem}"
+                    if key not in models:
+                        models[key] = str(pth_file)
+                        print(f"✅ Found: {key}")
+                break
+
         # Sort models for consistent display
         self.models = dict(sorted(models.items()))
         print(f"📊 Discovered {len(self.models)} model(s)")
-        
+
         if self.models:
             print("📋 Available models:")
             for key, path in self.models.items():
                 print(f"  - {key}: {path}")
-        
+
         return self.models
-    
+
     def load_model(self, model_type, model_path, device='cpu', conf_threshold=0.25):
         """
         Load a model based on type and path
-        
+
         Args:
             model_type: 'YOLO' or 'CNN'
             model_path: Path to model weights
             device: 'cpu' or 'cuda'
             conf_threshold: Confidence threshold
-            
+
         Returns:
             Detector instance or None if failed
         """
@@ -211,7 +229,9 @@ class ModelManager:
         self.device = device
         self.conf_threshold = conf_threshold
 
-        if model_type.upper() == "YOLO":
+        normalized_type = (model_type or "").upper()
+
+        if normalized_type == "YOLO":
             detector = YOLODetector(
                 model_path=model_path,
                 device=device,
@@ -219,10 +239,19 @@ class ModelManager:
                 enable_tracking=True,
                 max_lost_frames=15,
             )
-            self.loaded_model = detector
-            return detector
+        elif normalized_type == "CNN":
+            detector = CNNDetector(
+                model_path=model_path,
+                device=device,
+                conf_threshold=conf_threshold,
+                enable_tracking=True,
+                max_lost_frames=15,
+            )
         else:
             raise ValueError(f"Unsupported model type: {model_type}")
+
+        self.loaded_model = detector
+        return detector
 
     def unload_model(self):
         """Unload the currently loaded model and free resources."""
