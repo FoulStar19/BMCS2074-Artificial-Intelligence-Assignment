@@ -25,15 +25,24 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             help="Select the detection model type"
         )
         
-        # Model version selection
-        if available_models:
-            sorted_models = sorted(available_models.keys())
+        # Model version selection - filtered to the chosen Model Type, since
+        # available_models mixes "YOLO/..." and "CNN/..." keys together and
+        # showing them all regardless of model_type made it impossible to
+        # reliably pick a CNN checkpoint (you'd see YOLO .pt entries mixed
+        # in, or a CNN key could end up paired with model_type="YOLO").
+        filtered_models = {
+            key: path for key, path in available_models.items()
+            if key.startswith(f"{model_type}/")
+        }
+
+        if filtered_models:
+            sorted_models = sorted(filtered_models.keys())
             selected_model = st.selectbox(
                 "Model Version",
                 options=sorted_models,
                 help="Select the trained model version from your runs folder",
             )
-            model_path = available_models[selected_model]
+            model_path = filtered_models[selected_model]
             st.info(f"📁 {os.path.basename(model_path)}")
         else:
             st.warning(f"⚠️ No trained {model_type} model found.")
