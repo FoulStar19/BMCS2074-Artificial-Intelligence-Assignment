@@ -68,6 +68,7 @@ class VehicleTracker:
         self.tracks: Dict[int, TrackedVehicle] = {}
         self.prev_gray = None
         self.flow = None
+        self.frame_index = 0
         
         # Kalman filter for each track
         self.kalman_filters: Dict[int, cv2.KalmanFilter] = {}
@@ -397,9 +398,25 @@ class VehicleTracker:
         """Get all active tracks"""
         return [t for t in self.tracks.values() if t.active]
     
-    def draw_trails(self, frame: np.ndarray, trail_length: int = 20) -> np.ndarray:
-        """Draw tracking trails on frame"""
+    def draw_trails(
+        self,
+        frame: np.ndarray,
+        trail_length: int = 20,
+        class_colors: Optional[Dict[int, tuple]] = None,
+    ) -> np.ndarray:
+        """Draw tracking trails on frame.
+
+        Args:
+            frame: Current frame to draw on.
+            trail_length: How many recent history points to draw per track.
+            class_colors: Optional mapping of class_id -> (B, G, R) tuple,
+                e.g. YOLODetector.class_colors (which is itself built from
+                dataset.yaml). When provided, each vehicle's trail and
+                current-position marker are drawn in its own class color
+                instead of the flat green default.
+        """
         annotated_frame = frame.copy()
+        default_color = (0, 255, 0)
 
         for track in self.tracks.values():
 
@@ -408,7 +425,11 @@ class VehicleTracker:
 
             if len(track.history) < 2:
                 continue
-            
+
+            base_color = default_color
+            if class_colors is not None:
+                base_color = class_colors.get(track.class_id, default_color)
+
             # Get recent points
             points = list(track.history)[-trail_length:]
             
@@ -417,15 +438,15 @@ class VehicleTracker:
                 pt1 = (int(points[i-1][0]), int(points[i-1][1]))
                 pt2 = (int(points[i][0]), int(points[i][1]))
                 alpha = i / len(points)
-                color = (int(0 * alpha), int(255 * alpha), int(0 * alpha))
+                color = tuple(int(c * alpha) for c in base_color)
                 cv2.line(annotated_frame, pt1, pt2, color, 2)
             
             # Draw current position
             if points:
                 current_pos = points[-1]
-                cv2.circle(annotated_frame, 
-                          (int(current_pos[0]), int(current_pos[1])), 
-                          5, (0, 255, 0), -1)
+                cv2.circle(annotated_frame,
+                          (int(current_pos[0]), int(current_pos[1])),
+                          5, base_color, -1)
         
         return annotated_frame
 
