@@ -40,13 +40,22 @@ class YOLODetector:
         # Class mappings
         self.vehicle_classes = self.dataset_config.get(
             "names",
-            {0: "car", 1: "truck", 2: "bus", 3: "motorcycle", 4: "bicycle"}
+            {0: "car", 1: "truck", 2: "bus", 3: "motorcycle"}
         )
-        self.class_colors = self.dataset_config.get(
+
+        # dataset.yaml stores colors as [R, G, B]. Convert once here to
+        # (B, G, R) tuples so every consumer (cv2 drawing code) gets
+        # ready-to-use colors, regardless of whether the config loaded
+        # from disk or fell back to the defaults below.
+        raw_colors = self.dataset_config.get(
             "colors",
-            {0: [0, 0, 255], 1: [0, 255, 0], 2: [255, 0, 0],
-             3: [0, 255, 255], 4: [255, 0, 255]}
+            {0: [255, 0, 0], 1: [0, 255, 0], 2: [0, 0, 255], 3: [255, 255, 0]}
         )
+        self.class_colors = {
+            int(class_id): self._rgb_to_bgr(rgb)
+            for class_id, rgb in raw_colors.items()
+        }
+
         self.vehicle_class_ids = list(self.vehicle_classes.keys())
 
         # Load model
@@ -55,6 +64,13 @@ class YOLODetector:
         else:
             print(f"⚠️ Model not found: {model_path}. Using dummy detector.")
             self.is_dummy = True
+
+    @staticmethod
+    def _rgb_to_bgr(rgb) -> tuple:
+        """Convert an [R, G, B] list/tuple (as stored in dataset.yaml) to a
+        (B, G, R) tuple for use with cv2 drawing functions."""
+        r, g, b = rgb
+        return (b, g, r)
 
     def _load_dataset_config(self) -> Dict[str, Any]:
         """Load dataset configuration."""
@@ -74,16 +90,16 @@ class YOLODetector:
                 except Exception as e:
                     print(f"Error loading {yaml_path}: {e}")
 
-        # Default configuration
+        # Default configuration (kept in sync with dataset.yaml: 4 classes,
+        # no bicycle, colors stored as [R, G, B])
         return {
-            "nc": 5,
-            "names": {0: "car", 1: "truck", 2: "bus", 3: "motorcycle", 4: "bicycle"},
+            "nc": 4,
+            "names": {0: "car", 1: "truck", 2: "bus", 3: "motorcycle"},
             "colors": {
-                0: [0, 0, 255],
+                0: [255, 0, 0],
                 1: [0, 255, 0],
-                2: [255, 0, 0],
-                3: [0, 255, 255],
-                4: [255, 0, 255],
+                2: [0, 0, 255],
+                3: [255, 255, 0],
             },
         }
 
@@ -180,9 +196,8 @@ class YOLODetector:
         return self.vehicle_classes.get(class_id, f"class_{class_id}")
 
     def get_color_for_class(self, class_id: int) -> tuple:
-        """Get color for class ID."""
-        color = self.class_colors.get(class_id, [0, 255, 0])
-        return tuple(color) if isinstance(color, list) else (0, 255, 0)
+        """Get (B, G, R) color for class ID, ready for cv2 drawing."""
+        return self.class_colors.get(class_id, (0, 255, 0))
 
     def reset_tracker(self):
         """Reset the tracker."""
@@ -205,7 +220,7 @@ class YOLODetector:
             y = random.randint(50, max(51, h - 150))
             width = random.randint(60, 150)
             height = random.randint(60, 150)
-            class_id = random.randint(0, 4)
+            class_id = random.randint(0, len(self.vehicle_classes) - 1)
 
             detections.append({
                 "bbox": [x, y, x + width, y + height],
