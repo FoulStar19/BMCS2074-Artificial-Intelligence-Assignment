@@ -12,7 +12,6 @@ Classes:
 - Truck
 - Bus
 - Motorcycle
-- Bicycle
 """
 
 import torch
@@ -22,21 +21,31 @@ from torchvision import models
 
 class TrafficCNN(nn.Module):
 
-    def __init__(self, num_classes=5, pretrained=True):
+    def __init__(self, num_classes=4, pretrained=True):
         super(TrafficCNN, self).__init__()
 
+        # Use ImageNet pretrained MobileNetV2 weights
+        # when transfer learning is enabled.
         weights = (
-            models.MobileNet_V2_Weights.DEFAULT if pretrained else None
+            models.MobileNet_V2_Weights.DEFAULT
+            if pretrained
+            else None
         )
+
         self.model = models.mobilenet_v2(
             weights=weights
         )
 
+        # Replace the original ImageNet classifier
+        # with a classifier for our four vehicle classes.
         in_features = self.model.classifier[1].in_features
 
         self.model.classifier = nn.Sequential(
             nn.Dropout(0.3),
-            nn.Linear(in_features, num_classes)
+            nn.Linear(
+                in_features,
+                num_classes
+            )
         )
 
     def forward(self, x):
