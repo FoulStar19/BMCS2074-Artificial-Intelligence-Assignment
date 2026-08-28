@@ -64,8 +64,8 @@ def change_label_in_files(directory_path, original_label, new_label, file_patter
 
 def main():
     # Example usage - modify these variables as needed
-    directory = r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\dataset\labels"  # Current directory, change to your actual directory path
-    original_label = 9  # Change this to your original label number
+    directory = r"C:\Users\fouls\Downloads\dataset_adjust\labels"  # Current directory, change to your actual directory path
+    original_label = 8  # Change this to your original label number
     new_label = 3      # Change this to your temporary label number
     
     print(f"Changing label {original_label} to {new_label} in all annotation files...")
