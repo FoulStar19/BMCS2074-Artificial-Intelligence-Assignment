@@ -79,14 +79,23 @@ class VideoProcessingService:
         for det in detections:
             bbox = det.get('bbox', [0, 0, 100, 100])
             try:
-                result = self.classifier.classify_crop(frame, bbox)
+                # classify_bbox crops `bbox` out of `frame` itself and
+                # classifies it -- classify_crop takes an already-cropped
+                # image and has no (frame, bbox) signature.
+                result = self.classifier.classify_bbox(frame, bbox)
             except Exception as e:
                 print(f"⚠️ CNN verification failed for a box, keeping it: {e}")
                 verified.append(det)
                 continue
 
-            if result.get('is_vehicle', True):
-                verified.append(det)
+            # classify_bbox returns None for a degenerate/out-of-frame box,
+            # or {"class": "unknown", ...} when confidence fell below the
+            # classifier's threshold. Either way the CNN disagreed with the
+            # primary detector, so drop the box; otherwise keep it.
+            if result is None or result.get('class') == 'unknown':
+                continue
+
+            verified.append(det)
 
         return verified
 

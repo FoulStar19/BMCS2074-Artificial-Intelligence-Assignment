@@ -160,8 +160,8 @@ def _process_split(image_dir: Path, label_dir: Path, output_split_dir: Path, spl
 
 
 def cmd_prepare_dataset(args):
-    train_images, train_labels = DATASET_DIR / "Training_new" / "images", DATASET_DIR / "Training_new" / "labels"
-    val_images, val_labels = DATASET_DIR / "Validation_new" / "images", DATASET_DIR / "Validation_new" / "labels"
+    train_images, train_labels = DATASET_DIR / "Training" / "images", DATASET_DIR / "Training" / "labels"
+    val_images, val_labels = DATASET_DIR / "Validation" / "images", DATASET_DIR / "Validation" / "labels"
     output_dir = DATASET_DIR / "cnn_4class"
 
     for path in (train_images, train_labels, val_images, val_labels):

@@ -17,6 +17,10 @@ import torch
 
 from backend.detection.yolo_detector import YOLODetector
 from backend.detection.faster_rcnn_detector import FasterRCNNDetector
+# cnn_backend.py's class is named CNNVehicleClassifier; alias it to
+# CNNDetector, the name the rest of this file (and its docstrings)
+# already use for the CNN verification/legacy-primary path.
+from backend.detection.cnn_backend import CNNVehicleClassifier as CNNDetector
 
 
 class ModelManager:
