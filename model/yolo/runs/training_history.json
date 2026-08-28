@@ -14,7 +14,12 @@
       "version": "v3",
       "timestamp": "2026-08-27T23:07:46.984275",
       "path": "C:\\Users\\fouls\\Downloads\\TARUMT\\Y2S1\\AI\\BMCS2074-Artificial-Intelligence-Assignment\\model\\yolo\\runs\\v3"
+    },
+    {
+      "version": "v4",
+      "timestamp": "2026-08-28T12:40:19.330099",
+      "path": "C:\\Users\\fouls\\Downloads\\TARUMT\\Y2S1\\AI\\BMCS2074-Artificial-Intelligence-Assignment\\model\\yolo\\runs\\v4"
     }
   ],
-  "last_version": 3
+  "last_version": 4
 }

@@ -58,7 +58,6 @@ def train_model():
     model.train(
         data="C:\\Users\\fouls\\Downloads\\TARUMT\\Y2S1\\AI\\BMCS2074-Artificial-Intelligence-Assignment\\model\\yolo\\dataset.yaml",
         epochs=500,
-        imgsz=640,
         batch=11,  
         device=0,  
         workers=4,  

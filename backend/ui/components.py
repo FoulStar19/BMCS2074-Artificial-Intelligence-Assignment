@@ -11,28 +11,40 @@ import streamlit as st
 from backend.core.session_manager import SessionManager
 
 
+# Maps the sidebar's display label to the discover_models() key prefix.
+MODEL_TYPE_PREFIXES = {
+    "YOLO": "YOLO",
+    "Faster R-CNN": "FasterRCNN",
+}
+
+# Reasonable default confidence per backend (torchvision detection heads
+# tend to want a higher bar than YOLO's NMS-tuned output).
+DEFAULT_CONFIDENCE = {
+    "YOLO": 0.25,
+    "Faster R-CNN": 0.5,
+}
+
+
 def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str, Any]:
     """Display sidebar with model selection and parameters."""
     with st.sidebar:
         st.title("🚗 Traffic AI Detection")
         st.markdown("---")
 
-        # Model Selection
+        # Model Selection - the two primary, directly comparable backends
         st.subheader("🤖 Model Selection")
         model_type = st.selectbox(
             "Model Type",
-            options=["YOLO", "CNN"],
-            help="Select the detection model type"
+            options=list(MODEL_TYPE_PREFIXES.keys()),
+            help="YOLO and Faster R-CNN are trained on the same dataset split, so you can compare them directly.",
         )
-        
-        # Model version selection - filtered to the chosen Model Type, since
-        # available_models mixes "YOLO/..." and "CNN/..." keys together and
-        # showing them all regardless of model_type made it impossible to
-        # reliably pick a CNN checkpoint (you'd see YOLO .pt entries mixed
-        # in, or a CNN key could end up paired with model_type="YOLO").
+
+        # Model version selection - filtered to the chosen Model Type.
+        # YOLO entries are restricted to best.pt by ModelManager.
+        key_prefix = MODEL_TYPE_PREFIXES[model_type]
         filtered_models = {
             key: path for key, path in available_models.items()
-            if key.startswith(f"{model_type}/")
+            if key.startswith(f"{key_prefix}/")
         }
 
         if filtered_models:
@@ -40,10 +52,16 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             selected_model = st.selectbox(
                 "Model Version",
                 options=sorted_models,
-                help="Select the trained model version from your runs folder",
+                help=(
+                    "YOLO: only best.pt checkpoints are selectable. "
+                    "Faster R-CNN: select a .pth checkpoint."
+                ),
             )
             model_path = filtered_models[selected_model]
-            st.info(f"📁 {os.path.basename(model_path)}")
+            if model_type == "YOLO":
+                st.info("📁 best.pt")
+            else:
+                st.info(f"📁 {os.path.basename(model_path)}")
         else:
             st.warning(f"⚠️ No trained {model_type} model found.")
             selected_model = "None"
@@ -67,7 +85,7 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             "Confidence Threshold",
             min_value=0.1,
             max_value=0.9,
-            value=0.70 if model_type == "CNN" else 0.25,
+            value=DEFAULT_CONFIDENCE.get(model_type, 0.25),
             step=0.05,
             help="Minimum confidence score for detections",
         )
@@ -77,6 +95,38 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
             options=["Auto", "CPU", "CUDA"],
             index=0
         )
+
+        st.markdown("---")
+
+        # Optional CNN verification pass - the CNN's role now, rather
+        # than being a standalone primary detector.
+        st.subheader("🔎 Optional Verification")
+        cnn_models = {
+            key: path for key, path in available_models.items()
+            if key.startswith("CNN/")
+        }
+        enable_cnn_verification = False
+        cnn_model_path = None
+
+        if cnn_models:
+            enable_cnn_verification = st.checkbox(
+                "Verify detections with CNN classifier",
+                value=False,
+                help=(
+                    "Re-checks each box the primary detector finds with the CNN "
+                    "car classifier and drops boxes it disagrees with. Slower, "
+                    "but can reduce false positives."
+                ),
+            )
+            if enable_cnn_verification:
+                sorted_cnn_models = sorted(cnn_models.keys())
+                selected_cnn_model = st.selectbox(
+                    "CNN Classifier",
+                    options=sorted_cnn_models,
+                )
+                cnn_model_path = cnn_models[selected_cnn_model]
+        else:
+            st.caption("No CNN classifier checkpoint found - verification unavailable.")
 
         st.markdown("---")
 
@@ -112,6 +162,8 @@ def display_sidebar(model_manager, available_models: Dict[str, str]) -> Dict[str
         "confidence_threshold": confidence_threshold,
         "device": device,
         "process_button": process_button,
+        "enable_cnn_verification": enable_cnn_verification,
+        "cnn_model_path": cnn_model_path,
     }
 
 
@@ -134,6 +186,8 @@ def display_processing_tab(uploaded_file, config: Dict[str, Any]):
             f"{config.get('model_type', 'N/A')} - {config.get('selected_model', 'None')}"
         )
         st.metric("Confidence", f"{config.get('confidence_threshold', 0.25):.2f}")
+        if config.get("enable_cnn_verification"):
+            st.metric("CNN Verification", "Enabled")
 
         if uploaded_file is not None:
             st.success("✅ Video loaded")

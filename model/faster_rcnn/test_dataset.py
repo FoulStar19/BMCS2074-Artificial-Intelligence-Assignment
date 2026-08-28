@@ -1,90 +1,72 @@
+"""
+Quick sanity check that the Faster R-CNN dataset loader reads the SAME
+train split YOLO uses (via dataset.yaml) and produces sane boxes/labels.
+"""
+
 from pathlib import Path
 from PIL import Image
 import torch
 
-DATASET_ROOT = Path("dataset")
-TRAIN_DIR = DATASET_ROOT / "Training_new"
-
-CLASS_NAMES = ["car", "truck", "bus", "motorcycle"]
+from train_faster_rcnn import find_dataset_yaml, load_dataset_yaml
 
 
-def load_yolo_target(label_path, image_width, image_height):
+def load_yolo_target(label_path, image_width, image_height, class_names):
     boxes = []
     labels = []
 
     if not label_path.exists():
-        return torch.zeros((0, 4), dtype=torch.float32), torch.zeros(
-            (0,), dtype=torch.int64
-        )
+        return torch.zeros((0, 4), dtype=torch.float32), torch.zeros((0,), dtype=torch.int64)
 
     with open(label_path, "r", encoding="utf-8") as f:
         for line_number, line in enumerate(f, start=1):
             line = line.strip()
-
             if not line:
                 continue
 
             parts = line.split()
-
             if len(parts) != 5:
-                raise ValueError(
-                    f"Invalid label at {label_path}, line {line_number}: {line}"
-                )
+                raise ValueError(f"Invalid label at {label_path}, line {line_number}: {line}")
 
             class_id = int(parts[0])
             x_center, y_center, width, height = map(float, parts[1:])
 
-            if class_id < 0 or class_id >= len(CLASS_NAMES):
-                raise ValueError(
-                    f"Invalid class ID {class_id} in {label_path}"
-                )
+            if class_id < 0 or class_id >= len(class_names):
+                raise ValueError(f"Invalid class ID {class_id} in {label_path}")
 
-            # YOLO normalized coordinates -> pixel coordinates
             x_center *= image_width
             y_center *= image_height
             width *= image_width
             height *= image_height
 
-            xmin = x_center - width / 2
-            ymin = y_center - height / 2
-            xmax = x_center + width / 2
-            ymax = y_center + height / 2
-
-            # Clip boxes to image boundaries
-            xmin = max(0, min(xmin, image_width))
-            ymin = max(0, min(ymin, image_height))
-            xmax = max(0, min(xmax, image_width))
-            ymax = max(0, min(ymax, image_height))
+            xmin = max(0, min(x_center - width / 2, image_width))
+            ymin = max(0, min(y_center - height / 2, image_height))
+            xmax = max(0, min(x_center + width / 2, image_width))
+            ymax = max(0, min(y_center + height / 2, image_height))
 
             if xmax <= xmin or ymax <= ymin:
                 continue
 
             boxes.append([xmin, ymin, xmax, ymax])
-
-            # Faster R-CNN labels are normally 1-based because 0 is background
-            labels.append(class_id + 1)
+            labels.append(class_id + 1)  # Faster R-CNN: 0 = background
 
     if boxes:
-        boxes = torch.tensor(boxes, dtype=torch.float32)
-        labels = torch.tensor(labels, dtype=torch.int64)
-    else:
-        boxes = torch.zeros((0, 4), dtype=torch.float32)
-        labels = torch.zeros((0,), dtype=torch.int64)
-
-    return boxes, labels
+        return torch.tensor(boxes, dtype=torch.float32), torch.tensor(labels, dtype=torch.int64)
+    return torch.zeros((0, 4), dtype=torch.float32), torch.zeros((0,), dtype=torch.int64)
 
 
 def main():
-    image_dir = TRAIN_DIR / "images"
-    label_dir = TRAIN_DIR / "labels"
+    dataset_yaml_path = find_dataset_yaml()
+    train_dir, _val_dir, class_names, _cfg = load_dataset_yaml(dataset_yaml_path)
 
+    image_dir = train_dir / "images"
+    label_dir = train_dir / "labels"
     images = sorted(image_dir.glob("*"))
 
     print("=" * 70)
-    print("FASTER R-CNN DATASET TEST")
+    print("FASTER R-CNN DATASET TEST (same split as YOLO)")
     print("=" * 70)
-
-    print(f"Training images found: {len(images)}")
+    print(f"Dataset config    : {dataset_yaml_path}")
+    print(f"Training images   : {len(images)}")
 
     if not images:
         raise RuntimeError("No training images found.")
@@ -97,11 +79,7 @@ def main():
         with Image.open(image_path) as image:
             width, height = image.size
 
-        boxes, labels = load_yolo_target(
-            label_path,
-            width,
-            height
-        )
+        boxes, labels = load_yolo_target(label_path, width, height, class_names)
 
         print()
         print(f"Image : {image_path.name}")
@@ -109,7 +87,6 @@ def main():
         print(f"Label : {label_path.name}")
         print(f"Boxes : {len(boxes)}")
         print(f"Labels: {labels.tolist()}")
-
         if len(boxes) > 0:
             print("First box:", boxes[0].tolist())
 
@@ -123,7 +100,7 @@ def main():
     print(f"Total boxes   : {total_boxes}")
     print()
     print("Class mapping:")
-    for i, name in enumerate(CLASS_NAMES, start=1):
+    for i, name in enumerate(class_names, start=1):
         print(f"  Faster R-CNN label {i}: {name}")
 
 

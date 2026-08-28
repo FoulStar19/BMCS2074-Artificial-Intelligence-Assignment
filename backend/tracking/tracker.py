@@ -323,21 +323,26 @@ class VehicleTracker:
             
             detections[i] = det
         
-        # Remove old tracks
-        current_time = time.time()
-        inactive_tracks = []
-        for track_id, track in self.tracks.items():
-            if current_time - track.last_seen > self.max_lost_frames * 0.1:  # ~100ms per frame
-                track.active = False
-                inactive_tracks.append(track_id)
-        
-        # Remove inactive tracks after some time
-        for track_id in inactive_tracks[:len(inactive_tracks)//2]:
-            del self.tracks[track_id]
+        # Track lifetime is measured in VIDEO FRAMES, not wall-clock time.
+        # This prevents slow model inference from prematurely killing tracks.
+        current_track_ids = set(matches.keys())
 
-            if track_id in self.kalman_filters:
-                del self.kalman_filters[track_id]
-        
+        for track_id, track in list(self.tracks.items()):
+            if track_id not in current_track_ids:
+                track.lost_frames += 1
+            else:
+                track.lost_frames = 0
+
+            if track.lost_frames > self.max_lost_frames:
+                track.active = False
+
+        for track_id, track in list(self.tracks.items()):
+            if not track.active:
+                del self.tracks[track_id]
+                self.kalman_filters.pop(track_id, None)
+
+        self.frame_index += 1
+
         return detections
     
     def _calculate_speed(self, track: TrackedVehicle) -> float:

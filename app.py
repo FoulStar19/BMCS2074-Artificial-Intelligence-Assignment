@@ -123,7 +123,7 @@ def _handle_processing_tab(uploaded_file, sidebar_config, model_manager,
         _start_processing(
             uploaded_file, model_manager, model_type, model_path,
             selected_model, confidence_threshold, device_setting,
-            dataset_config
+            dataset_config, sidebar_config
         )
     
     # Display quick results if available
@@ -132,7 +132,7 @@ def _handle_processing_tab(uploaded_file, sidebar_config, model_manager,
 
 def _start_processing(uploaded_file, model_manager, model_type, model_path,
                      selected_model, confidence_threshold, device_setting,
-                     dataset_config):
+                     dataset_config, sidebar_config):
     """Start video processing with proper error handling."""
     if uploaded_file is None:
         st.error("⚠️ Please upload a video")
@@ -163,9 +163,28 @@ def _start_processing(uploaded_file, model_manager, model_type, model_path,
     # Enable tracking
     if hasattr(detector, "enable_tracking"):
         detector.enable_tracking = True
-    
+
+    # Optionally load the CNN verification classifier alongside the
+    # primary detector (see components.py "Optional Verification").
+    classifier = _load_classifier_if_requested(model_manager, sidebar_config, device)
+
     # Process video
-    _process_video(video_source, detector, dataset_config, confidence_threshold)
+    _process_video(video_source, detector, dataset_config, confidence_threshold, classifier)
+
+
+def _load_classifier_if_requested(model_manager, sidebar_config, device):
+    """Load the CNN verification classifier if the user enabled it in the
+    sidebar. Returns None (no-op downstream) if not requested or not found."""
+    if not sidebar_config.get("enable_cnn_verification"):
+        return None
+
+    cnn_model_path = sidebar_config.get("cnn_model_path")
+    with st.spinner("Loading CNN verification classifier..."):
+        classifier = model_manager.load_classifier(cnn_model_path, device=device)
+
+    if classifier is None:
+        st.warning("⚠️ Could not load the CNN classifier - continuing without verification.")
+    return classifier
 
 
 def _save_uploaded_video(uploaded_file):
@@ -216,9 +235,11 @@ def _load_detector(model_manager, model_type, model_path, device, confidence_thr
             return None
 
 
-def _process_video(video_source, detector, dataset_config, confidence_threshold):
+def _process_video(video_source, detector, dataset_config, confidence_threshold, classifier=None):
     """Process the video with the loaded detector."""
-    video_service = VideoProcessingService(detector=detector, dataset_config=dataset_config)
+    video_service = VideoProcessingService(
+        detector=detector, dataset_config=dataset_config, classifier=classifier
+    )
     SessionManager.set(SessionManager.VIDEO_SERVICE, video_service)
     
     status_placeholder = st.empty()

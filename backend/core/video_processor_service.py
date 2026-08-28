@@ -27,16 +27,22 @@ class VideoProcessingService:
     Service for processing videos with detection and tracking
     """
     
-    def __init__(self, detector, dataset_config):
+    def __init__(self, detector, dataset_config, classifier=None):
         """
         Initialize the video processing service
-        
+
         Args:
-            detector: Detection model instance
+            detector: Primary detection model instance (YOLODetector or
+                FasterRCNNDetector)
             dataset_config: Dataset configuration
+            classifier: Optional CNNDetector used as a verification pass --
+                each box `detector` finds is cropped and re-checked with
+                classifier.classify_crop(); boxes it disagrees with are
+                dropped. Pass None to skip verification (default).
         """
         self.detector = detector
         self.dataset_config = dataset_config
+        self.classifier = classifier
         self.class_colors = dataset_config.get('colors', {})
         self.class_names = dataset_config.get('names', {})
         
@@ -53,8 +59,37 @@ class VideoProcessingService:
         # Tracking state
         self.track_dict = defaultdict(list)
 
+        # Preserve the detector's exact output for every frame.
+        # The renderer can therefore draw real detections instead of relying
+        # exclusively on reconstructed/interpolated tracks.
+        self.frame_detections = defaultdict(list)
+
         self.prev_positions = {}
-        
+
+    def _verify_with_classifier(self, frame, detections):
+        """Drop detections the CNN classifier disagrees are vehicles.
+
+        No-op when no classifier was supplied (self.classifier is None),
+        so this pass is entirely opt-in.
+        """
+        if self.classifier is None or not detections:
+            return detections
+
+        verified = []
+        for det in detections:
+            bbox = det.get('bbox', [0, 0, 100, 100])
+            try:
+                result = self.classifier.classify_crop(frame, bbox)
+            except Exception as e:
+                print(f"⚠️ CNN verification failed for a box, keeping it: {e}")
+                verified.append(det)
+                continue
+
+            if result.get('is_vehicle', True):
+                verified.append(det)
+
+        return verified
+
     def normalize_box(self, box, frame_shape):
         """Convert (x1, y1, x2, y2) to normalized (xc, yc, w, h)"""
         h, w = frame_shape[:2]
@@ -101,7 +136,7 @@ class VideoProcessingService:
             if speed > 0:
                 label += f" {speed:.1f}km/h"
             if track_id is not None:
-                label = f"ID {int(track_id)} " + label
+                label = f"{class_name} | Speed: {speed:.1f} km/h"
             
             # Draw label background
             (text_width, text_height), _ = cv2.getTextSize(
@@ -193,10 +228,18 @@ class VideoProcessingService:
         self.is_processing = True
         self.progress = 0.0
         
-        # Reset tracking state
+        # Reset processing/tracking state
         self.track_dict = defaultdict(list)
+        self.frame_detections = defaultdict(list)
         self.speed_history = {}
         self.prev_positions = {}
+
+        # Reset the detector-owned tracker before every new video.
+        if hasattr(self.detector, "reset_tracker"):
+            try:
+                self.detector.reset_tracker()
+            except Exception as e:
+                print(f"⚠️ Could not reset detector tracker: {e}")
         
         # Open video
         cap = cv2.VideoCapture(video_path)
@@ -279,8 +322,32 @@ class VideoProcessingService:
                 # Filter by class if specified
                 if class_id >= 0:
                     detections = [d for d in detections if d.get('class', -1) == class_id]
+
+                # Optional CNN verification pass - drops boxes the CNN
+                # classifier disagrees are vehicles. No-op if no
+                # classifier was supplied.
+                detections = self._verify_with_classifier(frame, detections)
                 
-                # Store detections for interpolation
+                # Preserve the exact model output for this frame.
+                frame_key = frame_id - 1
+                self.frame_detections[frame_key] = [
+                    {
+                        "bbox": list(d.get("bbox", [0, 0, 100, 100])),
+                        "class": int(d.get("class", 0)),
+                        "confidence": float(d.get("confidence", 0.0)),
+                        "track_id": d.get("track_id"),
+                        "class_name": d.get(
+                            "class_name",
+                            self.class_names.get(
+                                int(d.get("class", 0)),
+                                f"Class {d.get('class', 0)}"
+                            )
+                        ),
+                    }
+                    for d in detections
+                ]
+
+                # Store detections for interpolation as a fallback.
                 if detections:
                     for det in detections:
                         bbox = det.get('bbox', [0, 0, 100, 100])
@@ -300,108 +367,101 @@ class VideoProcessingService:
                 if frame_id % 50 == 0:
                     gc.collect()
             
-            # Interpolate tracks
-            print("🔄 Interpolating tracks...")
-            interp_results = self.interpolate_tracks(total_frames)
-            
-            # Second pass: Create output video with interpolated detections
+            # Second pass: render the EXACT detections collected in pass 1.
+            # No re-inference and no interpolation is needed for drawing boxes.
             print("🎬 Second pass: Creating output video...")
             cap.release()
             cap = cv2.VideoCapture(video_path)
-            
+
             frame_id = 0
             all_speeds = []
-            
+
             while True:
-
-                ret, frame = (
-                    cap.read()
-                )
-
+                ret, frame = cap.read()
                 if not ret:
-
                     break
-                
-                # Update progress
+
                 if progress_callback and total_frames > 0:
                     progress = 0.7 + (frame_id / total_frames) * 0.3
                     self.progress = progress
                     progress_callback(progress, frame_id, total_frames)
-                
-                # Get interpolated detections for this frame
-                dets = interp_results.get(frame_id, [])
-                
-                # Convert normalized boxes back to pixel coordinates
-                frame_detections = []
-                for cls_id, bbox_norm, track_id in dets:
-                    x1, y1, x2, y2 = self.denormalize_box(*bbox_norm, frame.shape)
-                    
-                    # Calculate speed
-                    speed = 0
+
+                frame_detections = [
+                    dict(det)
+                    for det in self.frame_detections.get(frame_id, [])
+                ]
+
+                # Preserve the detector/tracker boxes exactly as returned.
+                # Calculate a display-only speed without changing the bbox.
+                for i, det in enumerate(frame_detections):
+                    bbox = det.get("bbox", [0, 0, 100, 100])
+                    track_id = det.get("track_id")
+
+                    if track_id is None:
+                        track_id = frame_id * 1000 + i
+                        det["track_id"] = track_id
+
+                    x1, y1, x2, y2 = map(int, bbox)
+                    center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                    speed = float(det.get("speed", 0.0) or 0.0)
+
                     if track_id in self.prev_positions:
                         prev_x, prev_y = self.prev_positions[track_id]
-                        center_x = (x1 + x2) // 2
-                        center_y = (y1 + y2) // 2
-                        displacement = np.sqrt((center_x - prev_x)**2 + (center_y - prev_y)**2)
-                        
-                        # Rough speed estimation
-                        speed_mps = (displacement * 0.05) * fps
-                        speed = speed_mps * 3.6  # Convert to km/h
-                        
-                        # Smooth speed
-                        if track_id not in self.speed_history:
-                            self.speed_history[track_id] = []
-                        self.speed_history[track_id].append(speed)
-                        if len(self.speed_history[track_id]) > 5:
-                            self.speed_history[track_id].pop(0)
-                        if self.speed_history[track_id]:
-                            speed = np.mean(self.speed_history[track_id])
-                    
-                    # Update previous position
-                    center_x = (x1 + x2) // 2
-                    center_y = (y1 + y2) // 2
-                    self.prev_positions[track_id] = (center_x, center_y)
-                    
-                    frame_detections.append({
-                        'bbox': [x1, y1, x2, y2],
-                        'class': cls_id,
-                        'confidence': 0.8,
-                        'track_id': track_id,
-                        'speed': round(max(0, speed), 2),
-                        'class_name': self.class_names.get(cls_id, f'Class {cls_id}')
-                    })
-                    
+                        displacement = np.sqrt(
+                            (center[0] - prev_x) ** 2 +
+                            (center[1] - prev_y) ** 2
+                        )
+                        speed = displacement * 0.05 * fps * 3.6
+
+                        history = self.speed_history.setdefault(track_id, [])
+                        history.append(speed)
+                        if len(history) > 5:
+                            history.pop(0)
+                        speed = float(np.mean(history))
+
+                    self.prev_positions[track_id] = center
+                    det["speed"] = round(max(0.0, speed), 2)
+
                     if speed > 0:
                         all_speeds.append(speed)
-                
-                # Draw detections
+
                 self.draw_detection_boxes(frame, frame_detections)
-                
-                # Add info overlay
-                overlay_text = f"Vehicles: {len(frame_detections)} | Frame: {frame_id}/{total_frames}"
-                cv2.putText(frame, overlay_text,
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                          0.7, (0, 255, 255), 2)
-                
-                # Calculate density
-                density = self.calculate_density(frame_detections, frame.shape)
-                results['density'].append(density)
 
-                # Record average speed for this frame
-                frame_speeds = [d['speed'] for d in frame_detections if d.get('speed', 0) > 0]
-                results['speeds'].append(float(np.mean(frame_speeds)) if frame_speeds else 0.0)
-                
-                # Write frame
+                overlay_text = (
+                    f"Vehicles: {len(frame_detections)} | "
+                    f"Frame: {frame_id + 1}/{total_frames}"
+                )
+                cv2.putText(
+                    frame,
+                    overlay_text,
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 255, 255),
+                    2,
+                )
+
+                density = self.calculate_density(
+                    frame_detections, frame.shape
+                )
+                results["density"].append(density)
+
+                frame_speeds = [
+                    d["speed"] for d in frame_detections
+                    if d.get("speed", 0) > 0
+                ]
+                results["speeds"].append(
+                    float(np.mean(frame_speeds))
+                    if frame_speeds else 0.0
+                )
+
                 out.write(frame)
-                
                 processed_count += 1
-
                 frame_id += 1
-                
-                # Memory cleanup
+
                 if frame_id % 50 == 0:
                     gc.collect()
-            
+
             # Calculate statistics
             results['processing_time'] = time.time() - start_time
             results['frames_processed'] = processed_count

@@ -1,6 +1,10 @@
 """
 Model Manager - handles model loading, discovery, and lifecycle management.
-Optimized with lazy loading and proper resource cleanup.
+
+Primary detectors (benchmarked head-to-head): YOLO and Faster R-CNN.
+The CNN is no longer a primary detector -- it's loaded separately via
+load_classifier() as an optional verification pass on top of whichever
+primary detector is active (see CNNDetector.classify_crop).
 """
 
 import os
@@ -12,7 +16,7 @@ from typing import Dict, Optional, Any
 import torch
 
 from backend.detection.yolo_detector import YOLODetector
-from backend.detection.cnn_detector import CNNDetector
+from backend.detection.faster_rcnn_detector import FasterRCNNDetector
 
 
 class ModelManager:
@@ -20,6 +24,7 @@ class ModelManager:
 
     def __init__(self):
         self.loaded_model = None
+        self.loaded_classifier = None
         self.model_type = None
         self.model_path = None
         self.device = "cpu"
@@ -64,7 +69,8 @@ class ModelManager:
         }
 
     def discover_models(self, runs_dir: str = "model/yolo/runs") -> Dict[str, str]:
-        """Discover available trained models (YOLO .pt weights and the CNN checkpoint)."""
+        """Discover available trained models: YOLO .pt weights, Faster
+        R-CNN .pth checkpoints, and the CNN classifier checkpoint."""
         models = {}
 
         # Get the absolute path to the project root
@@ -109,7 +115,7 @@ class ModelManager:
                             # Check for weights directory directly in version folder
                             weights_dir = item / "weights"
                             if weights_dir.exists():
-                                for pt_file in weights_dir.glob("*.pt"):
+                                for pt_file in weights_dir.glob("best.pt"):
                                     key = f"YOLO/{item.name}/{pt_file.stem}"
                                     models[key] = str(pt_file)
                                     print(f"    ✅ Found: {key}")
@@ -119,7 +125,7 @@ class ModelManager:
                                 if sub_dir.is_dir() and (sub_dir.name.startswith('train') or sub_dir.name == 'train'):
                                     weights_dir = sub_dir / "weights"
                                     if weights_dir.exists():
-                                        for pt_file in weights_dir.glob("*.pt"):
+                                        for pt_file in weights_dir.glob("best.pt"):
                                             key = f"YOLO/{item.name}/{sub_dir.name}/{pt_file.stem}"
                                             models[key] = str(pt_file)
                                             print(f"    ✅ Found: {key}")
@@ -129,7 +135,7 @@ class ModelManager:
                                 if sub_dir.is_dir() and sub_dir.name not in ['train']:
                                     weights_dir = sub_dir / "weights"
                                     if weights_dir.exists():
-                                        for pt_file in weights_dir.glob("*.pt"):
+                                        for pt_file in weights_dir.glob("best.pt"):
                                             key = f"YOLO/{item.name}/{sub_dir.name}/{pt_file.stem}"
                                             models[key] = str(pt_file)
                                             print(f"    ✅ Found: {key}")
@@ -138,55 +144,49 @@ class ModelManager:
                         elif item.name.startswith('train') or item.name == 'train':
                             weights_dir = item / "weights"
                             if weights_dir.exists():
-                                for pt_file in weights_dir.glob("*.pt"):
+                                for pt_file in weights_dir.glob("best.pt"):
                                     key = f"YOLO/{item.name}/{pt_file.stem}"
                                     models[key] = str(pt_file)
                                     print(f"  ✅ Found: {key}")
 
-        # Specific check for the known model path
-        known_model_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1\train\weights\best.pt")
-        if known_model_path.exists():
-            key = "YOLO/v1/train/best"
-            if key not in models:
-                models[key] = str(known_model_path)
-                print(f"✅ Found specific model: {key}")
-        else:
-            print(f"⚠️ Known model path not found: {known_model_path}")
+        # YOLO selection is intentionally restricted to best.pt.
+        # Use project-relative paths; never depend on another user's PC path.
+        yolo_best_candidates = [
+            project_root / "model" / "yolo" / "runs",
+            project_root / "model" / "runs",
+            project_root / "yolo" / "runs",
+            project_root / "runs",
+        ]
 
-        # Check if the v1 directory exists but doesn't have the train subdirectory
-        v1_path = Path(r"C:\Users\fouls\Downloads\TARUMT\Y2S1\AI\BMCS2074-Artificial-Intelligence-Assignment\model\yolo\runs\v1")
-        if v1_path.exists():
-            print(f"📁 Checking v1 directory: {v1_path}")
-            # Look recursively for any .pt files in v1
-            for pt_file in v1_path.glob("**/*.pt"):
-                # Create a relative key from v1
-                relative_path = pt_file.relative_to(v1_path)
-                key = f"YOLO/v1/{relative_path.parent.name}/{relative_path.stem}"
-                if key not in models:
-                    models[key] = str(pt_file)
-                    print(f"  ✅ Found: {key}")
+        for root in yolo_best_candidates:
+            if root.exists():
+                for pt_file in root.glob("**/best.pt"):
+                    key = f"YOLO/{pt_file.parent.parent.name}/{pt_file.parent.name}/best"
+                    if key not in models:
+                        models[key] = str(pt_file)
+                        print(f"  ✅ Found best.pt: {key}")
 
-        # Fallback: look for any .pt files in the project
-        if not models:
-            print("🔍 No models found in runs, searching for .pt files...")
-            fallback_paths = [
-                project_root,
-                project_root / "model",
-                project_root / "model" / "yolo",
-                project_root / "yolo",
-            ]
-            for path in fallback_paths:
-                if path.exists():
-                    for pt_file in path.glob("**/*.pt"):
-                        key = f"YOLO/{pt_file.parent.name}/{pt_file.stem}"
-                        if key not in models:
-                            models[key] = str(pt_file)
-                            print(f"  ✅ Found: {key}")
+        # Faster R-CNN checkpoint(s) - the second primary detector,
+        # trained via train_faster_rcnn.py on the same split as YOLO.
+        # Keys are prefixed "FasterRCNN/" so the sidebar can filter by
+        # backend, mirroring the "YOLO/" prefix above.
+        frcnn_search_paths = [
+            project_root / "model" / "faster_rcnn" / "saved_model",
+            current_dir.parent.parent / "model" / "faster_rcnn" / "saved_model",
+        ]
+        for frcnn_dir in frcnn_search_paths:
+            if frcnn_dir.exists():
+                for pth_file in frcnn_dir.glob("*.pth"):
+                    key = f"FasterRCNN/{pth_file.stem}"
+                    if key not in models:
+                        models[key] = str(pth_file)
+                        print(f"✅ Found: {key}")
+                break
 
-        # CNN checkpoint(s) - was previously never discovered, so the CNN
-        # backend had no path to select even after a load_model() branch
-        # existed for it. Keys are prefixed "CNN/" (mirroring the "YOLO/"
-        # prefix added above) so the sidebar can group/filter by backend.
+        # CNN checkpoint(s) - kept discoverable, but no longer selectable
+        # as a primary model_type in the sidebar. It's surfaced separately
+        # as an optional verification classifier (see load_classifier()).
+        # Keys are prefixed "CNN/".
         cnn_search_paths = [
             project_root / "model" / "cnn" / "saved_model",
             current_dir.parent.parent / "model" / "cnn" / "saved_model",
@@ -213,10 +213,10 @@ class ModelManager:
 
     def load_model(self, model_type, model_path, device='cpu', conf_threshold=0.25):
         """
-        Load a model based on type and path
+        Load a PRIMARY detector based on type and path.
 
         Args:
-            model_type: 'YOLO' or 'CNN'
+            model_type: 'YOLO' or 'Faster R-CNN' (also accepts 'FasterRCNN'/'FRCNN')
             model_path: Path to model weights
             device: 'cpu' or 'cuda'
             conf_threshold: Confidence threshold
@@ -229,7 +229,7 @@ class ModelManager:
         self.device = device
         self.conf_threshold = conf_threshold
 
-        normalized_type = (model_type or "").upper()
+        normalized_type = (model_type or "").upper().replace(" ", "").replace("-", "").replace("_", "")
 
         if normalized_type == "YOLO":
             detector = YOLODetector(
@@ -239,7 +239,17 @@ class ModelManager:
                 enable_tracking=True,
                 max_lost_frames=15,
             )
+        elif normalized_type in ("FASTERRCNN", "FRCNN"):
+            detector = FasterRCNNDetector(
+                model_path=model_path,
+                device=device,
+                conf_threshold=conf_threshold,
+                enable_tracking=True,
+                max_lost_frames=15,
+            )
         elif normalized_type == "CNN":
+            # Kept for backward compatibility only; the UI no longer
+            # offers CNN as a primary model_type (use load_classifier()).
             detector = CNNDetector(
                 model_path=model_path,
                 device=device,
@@ -253,8 +263,42 @@ class ModelManager:
         self.loaded_model = detector
         return detector
 
+    def load_classifier(self, model_path: Optional[str], device: str = "cpu",
+                         conf_threshold: float = 0.70) -> Optional[CNNDetector]:
+        """Load the CNN as an auxiliary crop-classifier used to verify
+        boxes found by the primary detector (see CNNDetector.classify_crop).
+        This is independent of load_model()/self.loaded_model."""
+        if not model_path or not os.path.exists(model_path):
+            print(f"⚠️ CNN classifier checkpoint not found: {model_path}")
+            return None
+
+        try:
+            classifier = CNNDetector(
+                model_path=model_path,
+                device=device,
+                conf_threshold=conf_threshold,
+                enable_tracking=False,
+            )
+            self.loaded_classifier = classifier
+            return classifier
+        except Exception as e:
+            print(f"Error loading CNN classifier: {e}")
+            self.loaded_classifier = None
+            return None
+
+    def unload_classifier(self):
+        """Unload the CNN verification classifier, if one is loaded."""
+        if self.loaded_classifier is not None:
+            try:
+                if hasattr(self.loaded_classifier, "unload"):
+                    self.loaded_classifier.unload()
+            except Exception as e:
+                print(f"Error unloading classifier: {e}")
+            self.loaded_classifier = None
+
     def unload_model(self):
-        """Unload the currently loaded model and free resources."""
+        """Unload the currently loaded primary detector AND any loaded
+        verification classifier, freeing all GPU memory in one call."""
         if self.loaded_model is not None:
             try:
                 if hasattr(self.loaded_model, "unload"):
@@ -269,7 +313,9 @@ class ModelManager:
                 print(f"Error unloading model: {e}")
 
             self.loaded_model = None
-        import gc
+
+        self.unload_classifier()
+
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

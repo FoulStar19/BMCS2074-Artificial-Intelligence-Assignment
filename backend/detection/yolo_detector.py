@@ -144,48 +144,74 @@ class YOLODetector:
             torch.cuda.empty_cache()
 
     def detect(self, frame: np.ndarray, enable_tracking: Optional[bool] = None) -> List[Dict]:
-        """Detect vehicles in frame."""
+        """Run YOLO detection and optionally add tracking information."""
         if self.is_dummy or self.model is None:
             return self._dummy_detect(frame)
 
-        use_tracking = enable_tracking if enable_tracking is not None else self.enable_tracking
+        use_tracking = (
+            enable_tracking
+            if enable_tracking is not None
+            else self.enable_tracking
+        )
 
         try:
-            # Run inference
             results = self.model(
                 frame,
                 conf=self.conf_threshold,
                 verbose=False,
-                stream=False
+                stream=False,
             )
 
             detections = []
 
             if results and len(results) > 0:
                 boxes = results[0].boxes
+
                 if boxes is not None and len(boxes) > 0:
                     for box in boxes:
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
+                        x1, y1, x2, y2 = (
+                            box.xyxy[0].cpu().numpy().astype(int)
+                        )
                         confidence = float(box.conf[0].cpu().numpy())
                         class_id = int(box.cls[0].cpu().numpy())
 
-                        if class_id in self.vehicle_class_ids:
-                            detections.append({
-                                "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                                "confidence": confidence,
-                                "class": class_id,
-                                "class_name": self.get_class_name(class_id),
-                            })
+                        detections.append({
+                            "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                            "confidence": confidence,
+                            "class": class_id,
+                            "class_name": self.get_class_name(class_id),
+                        })
 
-            # Apply tracking
+            # Tracking enriches detections but is never allowed to erase them.
             if use_tracking and detections:
-                detections = self.tracker.update(frame, detections)
+                raw_detections = detections
+                try:
+                    tracked = self.tracker.update(frame, detections)
+
+                    if isinstance(tracked, list) and len(tracked) == len(raw_detections):
+                        detections = tracked
+                    else:
+                        detections = raw_detections
+                        for i, det in enumerate(detections):
+                            det.setdefault("track_id", i)
+                            det.setdefault("speed", 0.0)
+
+                except Exception as tracker_error:
+                    print(
+                        f"⚠️ Tracker failed; keeping YOLO detections: "
+                        f"{tracker_error}"
+                    )
+                    detections = raw_detections
+                    for i, det in enumerate(detections):
+                        det.setdefault("track_id", i)
+                        det.setdefault("speed", 0.0)
 
             return detections
 
         except Exception as e:
-            print(f"Error during detection: {e}")
-            return self._dummy_detect(frame)
+            # Never replace a real detector failure with random dummy boxes.
+            print(f"❌ Error during YOLO detection: {e}")
+            return []
 
     def detect_frame(self, frame: np.ndarray, enable_tracking: Optional[bool] = None) -> List[Dict]:
         """Alias for detect method."""
